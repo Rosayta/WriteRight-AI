@@ -1,0 +1,5 @@
+{
+  "name": "WriteRight AI",
+  "description": "A professional AI-powered editor for grammar correction, style improvement, and tone analysis.",
+  "requestFramePermissions": ["microphone"]
+}
