@@ -13,6 +13,7 @@ import {
   emptySegment, toPlainText, segmentsToHtml,
   domToSegments, applyStyleToRange, applyCorrections, mergeSegments,
 } from './richText';
+import LandingPage from './LandingPage';
 
 /* ─── Gemini ──────────────────────────────────────────── */
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -97,6 +98,7 @@ function offsetToNodeOffset(container: HTMLElement, targetOffset: number): { nod
 /* ─── Component ───────────────────────────────────────── */
 export default function App() {
   /* Document */
+  const [showLanding, setShowLanding] = useState(true);
   const [segments, setSegments] = useState<StyledSegment[]>([emptySegment()]);
 
   /* Analysis */
@@ -538,6 +540,10 @@ export default function App() {
   }, [toneLabel]);
 
   /* ── Render ──────────────────────────────────────────── */
+  if (showLanding) {
+    return <LandingPage onGetStarted={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="app-root">
 
