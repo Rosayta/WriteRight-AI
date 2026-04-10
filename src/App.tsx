@@ -12,7 +12,7 @@ import {
 import {
   StyledSegment, HighlightColor,
   emptySegment, toPlainText, segmentsToHtml,
-  domToSegments, applyStyleToRange, applyCorrections, mergeSegments,
+  domToSegments, applyStyleToRange, applyCorrections, mergeSegments, segmentsToRichHtml,
 } from './richText';
 import LandingPage from './LandingPage';
 
@@ -442,11 +442,16 @@ export default function App() {
   /* ── Paraphrase ──────────────────────────────────────── */
   const generateParaphraseSets = async (content: string) => {
     setIsParaphrasing(true);
+    const richContent = segmentsToRichHtml(segments);
     const hint = numericHint(content);
     try {
       const response = await genAI.models.generateContent({
         model: 'gemini-3.1-flash-lite-preview',
-        contents: [{ role:'user', parts:[{ text:`Provide 6 paraphrased versions in JSON with keys: standard, formal, casual, simple, fluent, professional.${hint} Text: "${content}"` }] }],
+        contents: [{ role:'user', parts:[{ text: `Provide 6 paraphrased versions in JSON with keys: standard, formal, casual, simple, fluent, professional.${hint} 
+        
+        CRITICAL: The input text below contains HTML formatting like <strong>...</strong>. You MUST preserve and maintain appropriate bolding (<strong>) for names, numbers, and key terms in all 6 variations. 
+        
+        Text to paraphrase: "${richContent}"` }] }],
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -468,15 +473,18 @@ export default function App() {
   const makeFriendly = async () => {
     if (plainText.length < 5 || isFixing) return;
     setIsFixing(true);
+    const richContent = segmentsToRichHtml(segments);
     try {
       const hint = numericHint(plainText);
       const r = await genAI.models.generateContent({
         model: 'gemini-3.1-flash-lite-preview',
-        contents: [{ role:'user', parts:[{ text:`Rewrite to be warm and friendly, same meaning. Return ONLY the rewritten text.${hint}\n\n${plainText}` }] }],
+        contents: [{ role:'user', parts:[{ text:`Rewrite to be warm and friendly, same meaning. Return ONLY the rewritten text. Maintain any <strong> tags for names/emphasis correctly.${hint}\n\n${richContent}` }] }],
       });
-      const friendly = r.text?.trim() || plainText;
+      const friendly = r.text?.trim() || richContent;
       pushUndo(segments);
-      setSegments([{ text: friendly, bold: false, italic: false, underline: false, highlight: null }]);
+      const tmp = document.createElement('div');
+      tmp.innerHTML = friendly;
+      setSegments(domToSegments(tmp));
     } catch (err) { console.error('Make friendly error:', err);
     } finally { setIsFixing(false); }
   };
@@ -613,12 +621,13 @@ export default function App() {
                "in conclusion", "this highlights") with natural speech
             5. Add specificity and personality where generic
             6. Break up overly uniform paragraph structures
-            7. Preserve the core meaning and all facts exactly
-            ${hint}
-            Return JSON with: humanized (the rewritten text as a
-            string), changesCount (integer), techniquesSummary
-            (one sentence).
-            Text to humanize: "${plainText}"` }]
+             7. Preserve the core meaning and all facts exactly
+             8. Maintain <strong> tags for formatting and emphasis.
+             ${hint}
+             Return JSON with: humanized (the rewritten text as an
+             HTML string with <strong> tags), changesCount (integer), techniquesSummary
+             (one sentence).
+             Text to humanize: "${segmentsToRichHtml(segments)}"` }]
         }],
         config: {
           responseMimeType: 'application/json',
@@ -636,11 +645,9 @@ export default function App() {
       const data = JSON.parse(response.text || '{}') as HumanizerResult;
       if (data.humanized) {
         pushUndo(segments);
-        setSegments([{
-          text: data.humanized,
-          bold: false, italic: false,
-          underline: false, highlight: null,
-        }]);
+        const tmp = document.createElement('div');
+        tmp.innerHTML = data.humanized;
+        setSegments(domToSegments(tmp));
         setHumanizerResult(data);
         setShowHumanizerInfo(true);
         setHasFixed(false);
@@ -747,16 +754,38 @@ export default function App() {
   /* ── Copy ────────────────────────────────────────────── */
   const copyToClipboard = async (val: string, key: string) => {
     let ok = false;
-    if (navigator.clipboard && window.isSecureContext) {
-      try { await navigator.clipboard.writeText(val); ok = true; } catch {}
-    }
-    if (!ok) {
+    // Check if the value contains HTML tags
+    const hasHtml = /<[a-z][\s\S]*>/i.test(val);
+
+    if (hasHtml && navigator.clipboard && window.isSecureContext) {
       try {
-        const ta = document.createElement('textarea'); ta.value = val;
-        ta.style.cssText = 'position:fixed;top:-9999px;opacity:0;';
-        document.body.appendChild(ta); ta.select();
-        ok = document.execCommand('copy'); document.body.removeChild(ta);
-      } catch {}
+        const plain = val.replace(/<[^>]+>/g, '');
+        const blob = new Blob([val], { type: 'text/html' });
+        const plainBlob = new Blob([plain], { type: 'text/plain' });
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/html': blob,
+            'text/plain': plainBlob,
+          })
+        ]);
+        ok = true;
+      } catch (err) {
+        console.warn('Rich copy failed, falling back to plain text', err);
+      }
+    }
+
+    if (!ok) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(val.replace(/<[^>]+>/g, '')); ok = true; } catch {}
+      }
+      if (!ok) {
+        try {
+          const ta = document.createElement('textarea'); ta.value = val.replace(/<[^>]+>/g, '');
+          ta.style.cssText = 'position:fixed;top:-9999px;opacity:0;';
+          document.body.appendChild(ta); ta.select();
+          ok = document.execCommand('copy'); document.body.removeChild(ta);
+        } catch {}
+      }
     }
     if (ok) { setCopiedKey(key); setTimeout(() => setCopiedKey(null), 2000); }
   };
@@ -1121,12 +1150,14 @@ export default function App() {
                     {isParaphrasing
                       ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Generating…</div>
                       : val
-                        ? <p className="para-text">{val}</p>
+                        ? <p className="para-text" dangerouslySetInnerHTML={{ __html: val }} />
                         : <p className="para-placeholder">Variation will appear here…</p>}
                   </div>
                   {val && <button className="para-use-btn" onClick={()=>{
                     pushUndo(segments);
-                    setSegments([{ text: val, bold: false, italic: false, underline: false, highlight: null }]);
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = val;
+                    setSegments(domToSegments(tmp));
                   }}>Use →</button>}
                 </motion.div>
               );

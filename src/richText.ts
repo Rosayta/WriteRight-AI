@@ -48,6 +48,20 @@ export function toPlainText(segs: StyledSegment[]): string {
 }
 
 /**
+ * Render segments → Lightweight HTML string (strong, em, u)
+ * Used for AI prompts and rich-text clipboard copying.
+ */
+export function segmentsToRichHtml(segs: StyledSegment[]): string {
+  return segs.map(seg => {
+    let t = seg.text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (seg.bold)      t = `<strong>${t}</strong>`;
+    if (seg.italic)    t = `<em>${t}</em>`;
+    if (seg.underline) t = `<u>${t}</u>`;
+    return t;
+  }).join('').replace(/\n/g, '<br>');
+}
+
+/**
  * Render segments → HTML string for the contenteditable div.
  * Each segment becomes a <span> with appropriate classes.
  * Error spans are injected on top of existing style spans.
