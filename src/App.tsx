@@ -7,6 +7,7 @@ import {
   Bold, Italic, Underline, Highlighter,
   Undo2, Redo2, Trash2, Mic, MicOff,
   Copy, Check, RefreshCw, Sparkles, Menu, ChevronDown, Clock, Download,
+  Eye, ShieldCheck, GraduationCap, UserCheck, Lightbulb, CheckCircle2, X
 } from 'lucide-react';
 import {
   StyledSegment, HighlightColor,
@@ -41,6 +42,47 @@ interface AnalysisResult {
 interface ParaphraseSets {
   standard: string; formal: string; casual: string;
   simple: string; fluent: string; professional: string;
+}
+
+interface DetectorResult {
+  aiProbability: number;
+  humanProbability: number;
+  verdict: 'likely-ai' | 'likely-human' | 'mixed' | 'uncertain';
+  confidence: 'high' | 'medium' | 'low';
+  signals: string[];
+  highlightedPhrases: string[];
+}
+
+interface PlagiarismResult {
+  originalityScore: number;
+  riskLevel: 'low' | 'medium' | 'high';
+  flaggedPhrases: Array<{
+    phrase: string;
+    reason: string;
+    type: 'common-expression' | 'generic-template' | 'known-quote';
+  }>;
+  suggestions: string[];
+  summary: string;
+}
+
+interface HumanizerResult {
+  humanized: string;
+  changesCount: number;
+  techniquesSummary: string;
+}
+
+interface CoachResult {
+  overallAssessment: string;
+  overallGrade: 'A' | 'B' | 'C' | 'D';
+  strengths: string[];
+  improvements: Array<{
+    area: 'structure' | 'clarity' | 'engagement' | 'voice' | 'conciseness' | 'flow';
+    issue: string;
+    suggestion: string;
+    priority: 'high' | 'medium' | 'low';
+  }>;
+  quickTip: string;
+  targetAudience: string;
 }
 
 const PARAPHRASE_MODES = [
@@ -119,6 +161,23 @@ export default function App() {
   const originalTextRef = useRef('');
   const [viewMode, setViewMode] = useState<'original' | 'rewritten'>('rewritten');
 
+  /* New AI Features */
+  const [detectorResult, setDetectorResult] = useState<DetectorResult | null>(null);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [showDetector, setShowDetector] = useState(false);
+
+  const [plagiarismResult, setPlagiarismResult] = useState<PlagiarismResult | null>(null);
+  const [isCheckingPlag, setIsCheckingPlag] = useState(false);
+  const [showPlagiarism, setShowPlagiarism] = useState(false);
+
+  const [isHumanizing, setIsHumanizing] = useState(false);
+  const [humanizerResult, setHumanizerResult] = useState<HumanizerResult | null>(null);
+  const [showHumanizerInfo, setShowHumanizerInfo] = useState(false);
+
+  const [coachResult, setCoachResult] = useState<CoachResult | null>(null);
+  const [isCoaching, setIsCoaching] = useState(false);
+  const [showCoach, setShowCoach] = useState(false);
+
   /* UI */
   const [statusMsg,      setStatusMsg]      = useState('');
   const [formalityLevel, setFormalityLevel] = useState(50);
@@ -157,8 +216,16 @@ export default function App() {
   /* ── Render HTML ─────────────────────────────────────── */
   const renderedHtml = useMemo(() => {
     if (viewMode === 'original') return originalTextRef.current.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    if (isFixing) {
+       const words = plainText.split(/(\s+)/);
+       return words.map((word, i) => {
+         if (word.trim() === '') return word;
+         const delay = (i * 0.05) % 2;
+         return `<span class="scanning-word" style="animation-delay: ${delay}s">${word.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`;
+       }).join('').replace(/\n/g, '<br>');
+    }
     return segmentsToHtml(segments, analysis?.issues ?? []);
-  }, [segments, analysis, viewMode]);
+  }, [segments, analysis, viewMode, isFixing, plainText]);
 
   const lastHtmlRef = useRef('');
   useEffect(() => {
@@ -414,6 +481,245 @@ export default function App() {
     } finally { setIsFixing(false); }
   };
 
+  /* ── AI Features ─────────────────────────────────────── */
+  const runAiDetector = async () => {
+    if (plainText.length < 50 || isDetecting) return;
+    setIsDetecting(true);
+    setShowDetector(true);
+    try {
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Analyze this text and determine if it was
+            written by AI or a human. Look for: overly uniform sentence
+            length, lack of personal voice, generic transitions,
+            unnaturally perfect grammar, absence of colloquialisms,
+            overly structured paragraphs. Text: "${plainText}"` }]
+        }],
+        config: {
+          systemInstruction: `You are an AI content detector. Analyze
+            the provided text and return a JSON object. Be analytical
+            and objective. verdict must be exactly one of:
+            'likely-ai', 'likely-human', 'mixed', 'uncertain'.
+            confidence must be exactly one of: 'high','medium','low'.
+            signals should be 2-4 short bullet-point reasons (max 10
+            words each). highlightedPhrases should be up to 5 exact
+            short phrases (3-6 words) from the text that feel AI-like.
+            Return only valid JSON.`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              aiProbability:      { type: Type.NUMBER },
+              humanProbability:   { type: Type.NUMBER },
+              verdict:            { type: Type.STRING },
+              confidence:         { type: Type.STRING },
+              signals:            { type: Type.ARRAY,
+                items: { type: Type.STRING } },
+              highlightedPhrases: { type: Type.ARRAY,
+                items: { type: Type.STRING } },
+            },
+            required: ['aiProbability','humanProbability',
+              'verdict','confidence','signals','highlightedPhrases'],
+          },
+        },
+      });
+      const data = JSON.parse(response.text || '{}') as DetectorResult;
+      setDetectorResult(data);
+    } catch (err) {
+      console.error('AI detector error:', err);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  const runPlagiarismCheck = async () => {
+    if (plainText.length < 50 || isCheckingPlag) return;
+    setIsCheckingPlag(true);
+    setShowPlagiarism(true);
+    try {
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Analyze this text for originality. Flag
+            phrases that sound like well-known quotes, generic
+            templates, or overly common expressions. Text:
+            "${plainText}"` }]
+        }],
+        config: {
+          systemInstruction: `You are an originality analyzer. Detect
+            phrases that lack originality: common idioms presented as
+            original thought, generic filler phrases, well-known quotes,
+            or template-like sentence structures. riskLevel must be
+            exactly: 'low', 'medium', or 'high'. type for each flagged
+            phrase must be exactly one of: 'common-expression',
+            'generic-template', 'known-quote'. Return only valid JSON.`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              originalityScore: { type: Type.NUMBER },
+              riskLevel: { type: Type.STRING },
+              flaggedPhrases: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    phrase: { type: Type.STRING },
+                    reason: { type: Type.STRING },
+                    type:   { type: Type.STRING },
+                  },
+                  required: ['phrase','reason','type'],
+                },
+              },
+              suggestions: { type: Type.ARRAY,
+                items: { type: Type.STRING } },
+              summary: { type: Type.STRING },
+            },
+            required: ['originalityScore','riskLevel',
+              'flaggedPhrases','suggestions','summary'],
+          },
+        },
+      });
+      const data = JSON.parse(response.text || '{}') as PlagiarismResult;
+      setPlagiarismResult(data);
+    } catch (err) {
+      console.error('Plagiarism check error:', err);
+    } finally {
+      setIsCheckingPlag(false);
+    }
+  };
+
+  const humanizeText = async () => {
+    if (plainText.length < 20 || isHumanizing || isFixing) return;
+    setIsHumanizing(true);
+    try {
+      const hint = numericHint(plainText);
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Rewrite this text to sound authentically
+            human-written. Apply these techniques:
+            1. Vary sentence lengths dramatically — mix very short
+               sentences with longer ones
+            2. Add natural transitions and connective phrases
+               ("honestly", "the thing is", "what I mean is")
+            3. Introduce subtle imperfections — contractions,
+               occasional informality
+            4. Replace generic AI phrases ("it is important to note",
+               "in conclusion", "this highlights") with natural speech
+            5. Add specificity and personality where generic
+            6. Break up overly uniform paragraph structures
+            7. Preserve the core meaning and all facts exactly
+            ${hint}
+            Return JSON with: humanized (the rewritten text as a
+            string), changesCount (integer), techniquesSummary
+            (one sentence).
+            Text to humanize: "${plainText}"` }]
+        }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              humanized:         { type: Type.STRING },
+              changesCount:      { type: Type.NUMBER },
+              techniquesSummary: { type: Type.STRING },
+            },
+            required: ['humanized','changesCount','techniquesSummary'],
+          },
+        },
+      });
+      const data = JSON.parse(response.text || '{}') as HumanizerResult;
+      if (data.humanized) {
+        pushUndo(segments);
+        setSegments([{
+          text: data.humanized,
+          bold: false, italic: false,
+          underline: false, highlight: null,
+        }]);
+        setHumanizerResult(data);
+        setShowHumanizerInfo(true);
+        setHasFixed(false);
+        lastFixedRef.current = '';
+        setAnalysis(null);
+        setParaphraseSets(null);
+        setStatusMsg('Text humanized — sounds more natural ✓');
+        setTimeout(() => setShowHumanizerInfo(false), 5000);
+      }
+    } catch (err) {
+      console.error('Humanizer error:', err);
+      setStatusMsg('Humanizer failed — try again');
+    } finally {
+      setIsHumanizing(false);
+    }
+  };
+
+  const runWritingCoach = async () => {
+    if (plainText.length < 80 || isCoaching) return;
+    setIsCoaching(true);
+    setShowCoach(true);
+    try {
+      const response = await genAI.models.generateContent({
+        model: 'gemini-2.0-flash-lite',
+        contents: [{
+          role: 'user',
+          parts: [{ text: `Act as a professional writing coach and
+            editor. Give detailed, honest, constructive feedback on
+            this text. Be specific — reference the actual writing,
+            not generic advice. Text: "${plainText}"` }]
+        }],
+        config: {
+          systemInstruction: `You are a professional writing coach
+            with 20 years of editorial experience. Give honest,
+            specific, and constructive feedback. overallGrade must
+            be exactly: 'A', 'B', 'C', or 'D'. improvements area
+            must be exactly one of: 'structure', 'clarity',
+            'engagement', 'voice', 'conciseness', 'flow'. priority
+            must be exactly: 'high', 'medium', or 'low'. Return
+            max 3 improvements, sorted high → low priority. Be
+            encouraging but direct. Return only valid JSON.`,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              overallAssessment: { type: Type.STRING },
+              overallGrade:      { type: Type.STRING },
+              strengths:         { type: Type.ARRAY,
+                items: { type: Type.STRING } },
+              improvements: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    area:       { type: Type.STRING },
+                    issue:      { type: Type.STRING },
+                    suggestion: { type: Type.STRING },
+                    priority:   { type: Type.STRING },
+                  },
+                  required: ['area','issue','suggestion','priority'],
+                },
+              },
+              quickTip:       { type: Type.STRING },
+              targetAudience: { type: Type.STRING },
+            },
+            required: ['overallAssessment','overallGrade',
+              'strengths','improvements','quickTip','targetAudience'],
+          },
+        },
+      });
+      const data = JSON.parse(response.text || '{}') as CoachResult;
+      setCoachResult(data);
+    } catch (err) {
+      console.error('Writing coach error:', err);
+    } finally {
+      setIsCoaching(false);
+    }
+  };
+
   /* ── Clear ───────────────────────────────────────────── */
   const clearText = () => {
     pushUndo(segments);
@@ -630,10 +936,21 @@ export default function App() {
                 <input type="range" min="0" max="100" step="1" value={formalityLevel} onChange={e => setFormalityLevel(Number(e.target.value))} className="formality-slider" />
                 <span className="formality-label">Formal</span>
               </div>
+              <button className="make-friendly-btn humanize-btn" onClick={humanizeText} disabled={isFixing || plainText.length < 20 || isHumanizing}>
+                {isHumanizing ? <><RefreshCw size={14} className="spin"/> Humanizing…</> : <><UserCheck size={14} style={{ display: 'inline-block', verticalAlign: 'text-bottom' }}/> Humanize</>}
+              </button>
               <button className="make-friendly-btn" onClick={makeFriendly} disabled={isFixing || plainText.length < 5}>
                 😊 Make Friendly
               </button>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showHumanizerInfo && humanizerResult && (
+          <motion.div initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0}} className="humanizer-toast">
+            <CheckCircle2 size={13} style={{display:'inline-block',verticalAlign:'text-bottom',marginRight:'4px'}}/>
+            <strong>Humanized</strong> — {humanizerResult.changesCount} changes made. {humanizerResult.techniquesSummary}
           </motion.div>
         )}
       </AnimatePresence>
@@ -657,6 +974,9 @@ export default function App() {
               <button className={`tool-btn${isRecording?' tool-btn--active':''}`} onClick={toggleRecording} title="Voice input">
                 {isRecording ? <MicOff size={15}/> : <Mic size={15}/>}
               </button>
+              <button className="tool-btn" onClick={runAiDetector} disabled={isDetecting || plainText.length < 50} title="AI Detector"><Eye size={15}/></button>
+              <button className="tool-btn" onClick={runPlagiarismCheck} disabled={isCheckingPlag || plainText.length < 50} title="Originality Check"><ShieldCheck size={15}/></button>
+              <button className="tool-btn" onClick={runWritingCoach} disabled={isCoaching || plainText.length < 80} title="Writing Coach"><GraduationCap size={15}/></button>
               <button className="tool-btn tool-btn--danger" onClick={clearText} disabled={!plainText} title="Clear"><Trash2 size={15}/></button>
             </div>
           </div>
@@ -737,7 +1057,7 @@ export default function App() {
           <div className={`editor-area ${viewMode === 'original' ? 'editor-area--original' : ''}`}>
             <div
               ref={editorRef}
-              contentEditable
+              contentEditable={!isFixing}
               suppressContentEditableWarning
               onInput={handleInput}
               onPaste={handlePaste}
@@ -822,6 +1142,123 @@ export default function App() {
           </div>
         </motion.div>
       </main>
+
+      {/* FEATURE PANELS */}
+      <div className="feature-panels">
+        <AnimatePresence>
+          {/* Detector */}
+          {showDetector && (
+            <motion.div key="detector" initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0,y:20}} className="detector-panel">
+              <div className="feature-panel-header">
+                <span>🔍 AI Content Detector</span>
+                <button className="icon-btn-ghost" onClick={() => setShowDetector(false)}>✕</button>
+              </div>
+              {isDetecting ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Analyzing…</div> : detectorResult && (
+                <div className="feature-panel-content">
+                  <div className="feature-panel-left">
+                    <div className="detector-gauge" style={{ background: `conic-gradient(var(--accent-red) 0% ${detectorResult.aiProbability}%, var(--card-border) ${detectorResult.aiProbability}% 100%)` }}>
+                      <span>{detectorResult.aiProbability}%</span>
+                    </div>
+                    <div className="detector-verdict" style={{ background: detectorResult.verdict === 'likely-ai' ? 'var(--accent-red)' : detectorResult.verdict === 'likely-human' ? 'var(--accent-green)' : detectorResult.verdict === 'mixed' ? 'var(--accent-amber)' : 'var(--panel-text-muted)' }}>{detectorResult.verdict.replace('-', ' ')}</div>
+                    <div style={{fontSize:'0.75rem',color:'var(--panel-text-muted)'}}>Confidence: {detectorResult.confidence}</div>
+                  </div>
+                  <div className="feature-panel-right">
+                    <div style={{fontSize:'0.85rem',fontWeight:600}}>Why we think this:</div>
+                    <ul className="detector-signals">
+                      {detectorResult.signals.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                    <div style={{fontSize:'0.85rem',fontWeight:600, marginTop:'0.5rem'}}>AI-like phrases detected:</div>
+                    <div className="detector-phrases">
+                      {detectorResult.highlightedPhrases.map((p, i) => <div key={i} className="detector-phrase-pill">{p}</div>)}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* Plagiarism */}
+          {showPlagiarism && (
+            <motion.div key="plagiarism" initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0,y:20}} className="plagiarism-panel">
+              <div className="feature-panel-header">
+                <span>🛡 Originality Check (AI-powered) <span className="plag-disclaimer">This uses AI analysis, not a database scan. For academic submission, use a dedicated service.</span></span>
+                <button className="icon-btn-ghost" onClick={() => setShowPlagiarism(false)}>✕</button>
+              </div>
+              {isCheckingPlag ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Analyzing…</div> : plagiarismResult && (
+                <div className="feature-panel-content">
+                  <div className="feature-panel-left">
+                    <div className="plag-score-circle" style={{ background: `conic-gradient(var(--accent-green) 0% ${plagiarismResult.originalityScore}%, var(--card-border) ${plagiarismResult.originalityScore}% 100%)` }}>
+                      <span>{plagiarismResult.originalityScore}</span>
+                    </div>
+                    <div className="detector-verdict" style={{ background: plagiarismResult.riskLevel === 'high' ? 'var(--accent-red)' : plagiarismResult.riskLevel === 'medium' ? 'var(--accent-amber)' : 'var(--accent-green)' }}>Risk: {plagiarismResult.riskLevel}</div>
+                  </div>
+                  <div className="feature-panel-right">
+                    <p style={{fontSize:'0.9rem', color:'var(--panel-text-muted)'}}>{plagiarismResult.summary}</p>
+                    <div style={{fontSize:'0.85rem',fontWeight:600, marginTop:'0.5rem'}}>Flagged phrases:</div>
+                    {plagiarismResult.flaggedPhrases.map((f, i) => (
+                      <div key={i} className="plag-flagged-card">
+                        <span className="plag-type-badge">{f.type.replace('-', ' ')}</span>
+                        <strong>"{f.phrase}"</strong>
+                        <span style={{color:'var(--panel-text-muted)', fontSize:'0.85rem'}}>{f.reason}</span>
+                      </div>
+                    ))}
+                    <div style={{fontSize:'0.85rem',fontWeight:600, marginTop:'0.5rem'}}>Tips to improve:</div>
+                    <ul className="detector-signals">
+                      {plagiarismResult.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {/* Coach */}
+          {showCoach && (
+            <motion.div key="coach" initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0,y:20}} className="coach-panel">
+              <div className="feature-panel-header">
+                <span>🎓 Writing Coach</span>
+                <button className="icon-btn-ghost" onClick={() => setShowCoach(false)}>✕</button>
+              </div>
+              {isCoaching ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Reviewing…</div> : coachResult && (
+                <div className="feature-panel-content" style={{flexDirection: 'column'}}>
+                  <div className="feature-panel-content" style={{borderBottom: '1px solid var(--card-border)', paddingBottom:'1.5rem'}}>
+                    <div className="feature-panel-left">
+                      <div className="coach-grade-circle" style={{ background: coachResult.overallGrade === 'A' ? 'var(--accent-green)' : coachResult.overallGrade === 'B' ? 'var(--accent-gold)' : coachResult.overallGrade === 'C' ? 'var(--accent-amber)' : 'var(--accent-red)' }}>
+                        <span style={{color:'#1C2E26'}}>{coachResult.overallGrade}</span>
+                      </div>
+                    </div>
+                    <div className="feature-panel-right">
+                      <p style={{fontSize:'0.95rem'}}>{coachResult.overallAssessment}</p>
+                      <div style={{fontSize:'0.8rem', color:'var(--panel-text-muted)'}}>Target audience: {coachResult.targetAudience}</div>
+                      <div style={{fontSize:'0.85rem',fontWeight:600, marginTop:'0.5rem'}}>⭐ Strengths:</div>
+                      {coachResult.strengths.map((s, i) => <div key={i} className="coach-strength-item"><CheckCircle2 size={14} style={{color:'var(--accent-green)'}}/><span>{s}</span></div>)}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'0.85rem',fontWeight:600, marginBottom:'0.75rem'}}>Areas to Improve:</div>
+                    <div style={{display:'flex', flexDirection:'column', gap:'0.75rem'}}>
+                      {coachResult.improvements.map((imp, i) => (
+                        <div key={i} className="coach-improvement" style={{borderLeftColor: imp.priority === 'high' ? 'var(--accent-red)' : imp.priority === 'medium' ? 'var(--accent-amber)' : 'var(--panel-text-muted)'}}>
+                          <div className="coach-priority-header">
+                            <span className="coach-priority-badge" style={{background: imp.priority === 'high' ? 'var(--accent-red)' : imp.priority === 'medium' ? 'var(--accent-amber)' : 'var(--panel-text-muted)'}}>{imp.priority}</span>
+                            <span className="coach-area-label">{imp.area}</span>
+                          </div>
+                          <strong style={{fontSize:'0.85rem'}}>Issue: {imp.issue}</strong>
+                          <span style={{color:'var(--panel-text-muted)', fontSize:'0.85rem'}}>→ {imp.suggestion}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="coach-quicktip">
+                      <Lightbulb size={20} style={{color:'var(--accent-gold)', flexShrink:0}}/>
+                      <span style={{fontSize:'0.9rem'}}><strong>Quick Win:</strong> {coachResult.quickTip}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       {/* HISTORY SIDEBAR */}
       <AnimatePresence>
