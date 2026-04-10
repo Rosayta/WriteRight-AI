@@ -1056,3 +1056,61 @@ body {
 .pro-badge { position: absolute; top: -12px; right: 2rem; background: var(--accent-gold); color: #1a1a1a; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; padding: 0.25rem 0.8rem; border-radius: 12px; letter-spacing: 0.5px; }
 
 @media (max-width: 768px) { .pricing-grid { grid-template-columns: 1fr; } }
+
+/* ─── Editor Enhancements ─────────────────────────────────── */
+/* Score Panel */
+.score-panel {
+  display: flex; align-items: center; gap: 1.5rem;
+  background: var(--panel-dark-bg); border-radius: var(--radius-lg);
+  padding: 1rem 1.5rem; margin-bottom: 0.75rem;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.score-circle {
+  width: 60px; height: 60px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; background: conic-gradient(var(--accent-gold) var(--score-deg), rgba(255,255,255,0.05) 0deg);
+}
+.score-circle::before {
+  content: ""; position: absolute; inset: 5px;
+  background: var(--panel-dark-bg); border-radius: 50%;
+}
+.score-number {
+  position: relative; z-index: 1; font-family: var(--font-display);
+  font-size: 1.5rem; font-weight: 600; color: var(--panel-text);
+}
+.score-details { display: flex; flex-direction: column; gap: 4px; }
+.score-title { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--panel-text-muted); }
+.sub-scores { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.score-pill {
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 999px; padding: 4px 10px; font-size: 0.65rem; color: var(--panel-text-muted);
+}
+.score-pill span { color: var(--panel-text); font-weight: 600; margin-left: 4px; }
+
+/* View Toggle (Original / Rewritten) */
+.view-toggle-bar {
+  display: flex; align-items: center; gap: 4px; margin-bottom: 0.75rem;
+  background: rgba(255,255,255,0.03); border-radius: 999px; padding: 4px;
+  width: fit-content; border: 1px solid rgba(255,255,255,0.08);
+}
+.view-tab {
+  background: transparent; border: none; border-radius: 999px;
+  padding: 6px 14px; font-size: 0.75rem; font-weight: 600;
+  color: var(--panel-text-muted); cursor: pointer; transition: all 0.2s;
+}
+.view-tab:hover { color: var(--panel-text); }
+.view-tab--active { background: var(--panel-cream-bg); color: var(--bg-page); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.editor-area { transition: opacity 0.3s; }
+.editor-area--original { opacity: 0.7; pointer-events: none; }
+
+/* Tone Badge Variations */
+.para-tone-chip--formal { background: rgba(232,196,66,0.15) !important; border-color: rgba(232,196,66,0.3) !important; }
+.para-tone-chip--formal .para-tone-name { color: var(--accent-gold) !important; }
+
+.para-tone-chip--casual { background: rgba(90,168,112,0.15) !important; border-color: rgba(90,168,112,0.3) !important; }
+.para-tone-chip--casual .para-tone-name { color: var(--accent-green) !important; }
+
+.para-tone-chip--urgent { background: rgba(212,144,58,0.15) !important; border-color: rgba(212,144,58,0.3) !important; }
+.para-tone-chip--urgent .para-tone-name { color: var(--accent-amber) !important; }
+
+.para-tone-chip--neutral { background: rgba(255,255,255,0.05); }

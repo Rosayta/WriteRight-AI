@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Bold, Italic, Underline, Highlighter,
   Undo2, Redo2, Trash2, Mic, MicOff,
-  Copy, Check, RefreshCw, Sparkles, Menu, ChevronDown, Clock,
+  Copy, Check, RefreshCw, Sparkles, Menu, ChevronDown, Clock, Download,
 } from 'lucide-react';
 import {
   StyledSegment, HighlightColor,
@@ -115,6 +115,10 @@ export default function App() {
   const [isParaphrasing,     setIsParaphrasing]     = useState(false);
   const [copiedKey,          setCopiedKey]          = useState<string | null>(null);
 
+  /* View Toggle */
+  const originalTextRef = useRef('');
+  const [viewMode, setViewMode] = useState<'original' | 'rewritten'>('rewritten');
+
   /* UI */
   const [statusMsg,      setStatusMsg]      = useState('');
   const [formalityLevel, setFormalityLevel] = useState(50);
@@ -151,10 +155,10 @@ export default function App() {
   const canRedo = redoStack.current.length > 0;
 
   /* ── Render HTML ─────────────────────────────────────── */
-  const renderedHtml = useMemo(
-    () => segmentsToHtml(segments, analysis?.issues ?? []),
-    [segments, analysis],
-  );
+  const renderedHtml = useMemo(() => {
+    if (viewMode === 'original') return originalTextRef.current.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    return segmentsToHtml(segments, analysis?.issues ?? []);
+  }, [segments, analysis, viewMode]);
 
   const lastHtmlRef = useRef('');
   useEffect(() => {
@@ -208,7 +212,10 @@ export default function App() {
     if (!editorRef.current) return;
     const newSegs = domToSegments(editorRef.current);
     setSegments(prev => { pushUndo(prev); return newSegs; });
-    if (hasFixed && toPlainText(domToSegments(editorRef.current)) !== lastFixedRef.current) setHasFixed(false);
+    if (hasFixed && toPlainText(domToSegments(editorRef.current)) !== lastFixedRef.current) {
+      setHasFixed(false);
+      setViewMode('rewritten');
+    }
   }, [hasFixed, pushUndo]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -310,6 +317,7 @@ export default function App() {
   /* ── Fix All ─────────────────────────────────────────── */
   const fixAll = async () => {
     if (isFixing || hasFixed || plainText.length < 5) return;
+    originalTextRef.current = plainText;
     setIsFixing(true); setStatusMsg('Fixing errors…');
     try {
       const hint = numericHint(plainText);
@@ -412,8 +420,22 @@ export default function App() {
     setSegments([emptySegment()]);
     setAnalysis(null); setParaphraseSets(null);
     setHasFixed(false); lastFixedRef.current = '';
+    setViewMode('rewritten');
+    originalTextRef.current = '';
     setStatusMsg('');
     setTimeout(() => editorRef.current?.focus(), 0);
+  };
+
+  /* ── Download ────────────────────────────────────────── */
+  const handleDownload = () => {
+    const textToDownload = viewMode === 'original' ? originalTextRef.current : plainText;
+    const blob = new Blob([textToDownload], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'writeright-export.txt';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   /* ── Copy ────────────────────────────────────────────── */
@@ -537,6 +559,14 @@ export default function App() {
     if (t.includes('neutral'))                             return '😐';
     if (t.includes('urgent') || t.includes('direct'))     return '⚡';
     return '📝';
+  }, [toneLabel]);
+
+  const toneStyleClass = useMemo(() => {
+    const t = toneLabel.toLowerCase();
+    if (t.includes('professional') || t.includes('formal')) return 'para-tone-chip--formal';
+    if (t.includes('casual') || t.includes('friendly')) return 'para-tone-chip--casual';
+    if (t.includes('urgent') || t.includes('direct')) return 'para-tone-chip--urgent';
+    return 'para-tone-chip--neutral';
   }, [toneLabel]);
 
   /* ── Render ──────────────────────────────────────────── */
@@ -670,8 +700,41 @@ export default function App() {
             <span className="rich-format-hint">Ctrl+B · Ctrl+I · Ctrl+U</span>
           </div>
 
+          {/* Score Panel */}
+          <AnimatePresence>
+            {analysis !== null && plainText.length >= 5 && (
+              <motion.div key="score" initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:10}} className="score-panel">
+                <div className="score-circle" style={{ '--score-deg': `${(analysis.score / 100) * 360}deg` } as any}>
+                  <span className="score-number">{analysis.score}</span>
+                </div>
+                <div className="score-details">
+                  <span className="score-title">Writing Score</span>
+                  <div className="sub-scores">
+                    <div className="score-pill">Clarity: <span>{Math.max(0, Math.min(100, analysis.score - 5))}</span></div>
+                    <div className="score-pill">Grammar: <span>{Math.max(0, Math.min(100, 100 - (analysis.issues.length * 10)))}</span></div>
+                    <div className="score-pill">Style: <span>{Math.max(0, Math.min(100, analysis.score + 3))}</span></div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* View Toggle */}
+          {hasFixed && (
+            <div className="view-toggle-bar">
+              <button 
+                className={`view-tab ${viewMode === 'original' ? 'view-tab--active' : ''}`}
+                onClick={() => setViewMode('original')}
+              >Original</button>
+              <button 
+                className={`view-tab ${viewMode === 'rewritten' ? 'view-tab--active' : ''}`}
+                onClick={() => setViewMode('rewritten')}
+              >Rewritten</button>
+            </div>
+          )}
+
           {/* Editor area */}
-          <div className="editor-area">
+          <div className={`editor-area ${viewMode === 'original' ? 'editor-area--original' : ''}`}>
             <div
               ref={editorRef}
               contentEditable
@@ -709,6 +772,9 @@ export default function App() {
               if(!editorRef.current) return;
               document.execCommand('insertText', false, '…');
             }} title="Ellipsis">…</button>
+            <button className="fmt-btn" onClick={handleDownload} title="Download .txt" disabled={plainText.length < 5}>
+              <Download size={13} style={{ display: 'inline-block', verticalAlign: 'text-bottom', marginRight: '4px' }} /> Download
+            </button>
             <button className={`fmt-btn fmt-btn--fix${hasFixed?' fmt-btn--fixed':''}`} onClick={fixAll}
               disabled={hasFixed||isFixing||plainText.length<5}>
               {hasFixed?'✅ Fixed':isFixing?'…':'FIX ALL'}
@@ -747,7 +813,7 @@ export default function App() {
             })}
           </div>
           <div className="paraphrase-footer">
-            <div className="para-tone-chip"><span>{toneEmoji}</span><span className="para-tone-name">{toneLabel||'Neutral'}</span></div>
+            <div className={`para-tone-chip ${toneStyleClass}`}><span>{toneEmoji}</span><span className="para-tone-name">{toneLabel||'Neutral'}</span></div>
             <div className="para-word-count">{wordCount} WORDS · {charCount} CHARS</div>
             <button className="refresh-btn" onClick={()=>plainText.length>=5&&generateParaphraseSets(plainText)}
               disabled={isParaphrasing||plainText.length<5} title="Regenerate">
