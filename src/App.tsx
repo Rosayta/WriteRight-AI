@@ -17,7 +17,7 @@ import {
 import LandingPage from './LandingPage';
 
 /* ─── Gemini ──────────────────────────────────────────── */
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const genAI = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : undefined) || '' });
 
 /* ─── Numeric preservation ────────────────────────────── */
 function extractNumericTokens(text: string): string[] {
@@ -343,7 +343,7 @@ export default function App() {
     setIsAnalyzing(true);
     try {
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{ role: 'user', parts: [{ text: `Analyze this text: "${content}"` }] }],
         config: {
           systemInstruction: `You are a professional editor. Analyze for spelling, grammar, punctuation, and style issues. Return JSON: issues (array of {orig, fix, cat, msg}), score (0-100), tone (string), formality (0-100). cat must be one of: spelling, grammar, punctuation, style.${numericHint(content)} Return only JSON.`,
@@ -389,13 +389,13 @@ export default function App() {
     try {
       const hint = numericHint(plainText);
       const r1 = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{ role:'user', parts:[{ text:`Fix all errors. Return ONLY corrected text.${hint}\n\n${plainText}` }] }],
       });
       const corrected = r1.text?.trim() || plainText;
 
       const r2 = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{ role:'user', parts:[{ text:`Compare original and corrected text. List exact word-level changes as JSON array of {orig, fix}. Original: "${plainText}" Corrected: "${corrected}"` }] }],
         config: {
           responseMimeType: 'application/json',
@@ -445,7 +445,7 @@ export default function App() {
     const hint = numericHint(content);
     try {
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{ role:'user', parts:[{ text:`Provide 6 paraphrased versions in JSON with keys: standard, formal, casual, simple, fluent, professional.${hint} Text: "${content}"` }] }],
         config: {
           responseMimeType: 'application/json',
@@ -471,7 +471,7 @@ export default function App() {
     try {
       const hint = numericHint(plainText);
       const r = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{ role:'user', parts:[{ text:`Rewrite to be warm and friendly, same meaning. Return ONLY the rewritten text.${hint}\n\n${plainText}` }] }],
       });
       const friendly = r.text?.trim() || plainText;
@@ -488,7 +488,7 @@ export default function App() {
     setShowDetector(true);
     try {
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{
           role: 'user',
           parts: [{ text: `Analyze this text and determine if it was
@@ -540,7 +540,7 @@ export default function App() {
     setShowPlagiarism(true);
     try {
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{
           role: 'user',
           parts: [{ text: `Analyze this text for originality. Flag
@@ -598,7 +598,7 @@ export default function App() {
     try {
       const hint = numericHint(plainText);
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{
           role: 'user',
           parts: [{ text: `Rewrite this text to sound authentically
@@ -664,7 +664,7 @@ export default function App() {
     setShowCoach(true);
     try {
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: [{
           role: 'user',
           parts: [{ text: `Act as a professional writing coach and
