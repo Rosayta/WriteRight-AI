@@ -1,6 +1,7 @@
 import {
   useState, useEffect, useRef, useMemo, useCallback,
 } from 'react';
+import type * as React from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -16,7 +17,7 @@ import {
 } from './richText';
 
 /* ─── Gemini ──────────────────────────────────────────── */
-const genAI = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 /* ─── Numeric preservation ────────────────────────────── */
 function extractNumericTokens(text: string): string[] {
@@ -36,7 +37,7 @@ interface Issue {
   msg: string; offset: number;
 }
 interface AnalysisResult {
-  issues: Issue[]; score: number; tone: string; formality: number;
+  issues: Issue[]; tone: string; formality: number;
 }
 interface ParaphraseSets {
   empathetic: StyledSegment[]; resolution: StyledSegment[]; deescalation: StyledSegment[];
@@ -286,15 +287,15 @@ export default function Editor({ onNavigateHome }: EditorProps) {
         model: aiModel,
         contents: [{ role: 'user', parts: [{ text: `Analyze this text: "${content}"` }] }],
         config: {
-          systemInstruction: `You are a professional editor. Analyze for spelling, grammar, punctuation, and style issues. Return JSON: issues (array of {orig, fix, cat, msg}), score (0-100), tone (string), formality (0-100). cat must be one of: spelling, grammar, punctuation, style.${numericHint(content)} Return only JSON.`,
+          systemInstruction: `You are a professional editor. Analyze for spelling, grammar, punctuation, and style issues. Return JSON: issues (array of {orig, fix, cat, msg}), tone (string), formality (0-100). cat must be one of: spelling, grammar, punctuation, style.${numericHint(content)} Return only JSON.`,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
               issues: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { orig:{type:Type.STRING}, fix:{type:Type.STRING}, cat:{type:Type.STRING}, msg:{type:Type.STRING} }, required:['orig','fix','cat','msg'] } },
-              score: { type: Type.NUMBER }, tone: { type: Type.STRING }, formality: { type: Type.NUMBER },
+              tone: { type: Type.STRING }, formality: { type: Type.NUMBER },
             },
-            required: ['issues','score','tone','formality'],
+            required: ['issues','tone','formality'],
           },
         },
       });
@@ -721,7 +722,7 @@ Return ONLY JSON.`,
               <text x="50" y="56" textAnchor="middle" fontFamily="Spectral,serif" fontWeight="600" fontSize="26" fill="var(--accent-gold)">WR</text>
             </svg>
           </div>
-          <h1 className="app-title">WriteRight <span>AI</span></h1>
+          <h1 className="app-title">Voice <span>WriteRight</span></h1>
           <div className="model-badge" style={{ padding: '0 8px 0 0' }}>
             <Sparkles size={11} style={{ marginLeft: '8px' }}/>
             <select 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#1C2E26"/>
+  <path d="M32 7 38 26 57 32 38 38 32 57 26 38 7 32 26 26Z" fill="none" stroke="#E8C442" stroke-width="3.5" stroke-linejoin="round"/>
+  <text x="32" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="17" font-weight="700" fill="#E8C442">VW</text>
+</svg>

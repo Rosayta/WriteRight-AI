@@ -46,7 +46,7 @@ interface WritingInsight {
   suggestion: string;
 }
 interface AnalysisResult {
-  issues: Issue[]; score: number; tone: string; formality: number;
+  issues: Issue[]; tone: string; formality: number;
   insights: WritingInsight[];
 }
 interface ParaphraseSets {
@@ -174,7 +174,6 @@ function buildLocalAnalysis(content: string): AnalysisResult {
   const sentenceCount = Math.max(1, content.split(/[.!?]+/).filter(Boolean).length);
   const words = content.trim().split(/\s+/).filter(Boolean);
   const avgSentenceLength = words.length / sentenceCount;
-  const score = Math.max(45, Math.min(100, 98 - issues.length * 8 - Math.max(0, avgSentenceLength - 28)));
   const formality = /\b(please|kindly|regarding|sincerely|therefore|however)\b/i.test(content) ? 72 : 45;
   const tone = formality > 65 ? 'Professional' : /\bthanks|thank you|happy to|glad\b/i.test(content) ? 'Friendly' : 'Neutral';
   const insights: WritingInsight[] = [];
@@ -192,7 +191,7 @@ function buildLocalAnalysis(content: string): AnalysisResult {
       suggestion: 'Review the underlined text and apply the suggested corrections.',
     });
   }
-  return { issues, score: Math.round(score), tone, formality, insights };
+  return { issues, tone, formality, insights };
 }
 
 function applyLocalFixes(content: string): string {
@@ -585,7 +584,6 @@ export default function App() {
       const remoteIssues = locateIssueOffsets((remote.issues ?? []) as Issue[], content);
       const merged: AnalysisResult = {
         issues: mergeIssues(local.issues, remoteIssues),
-        score: Math.round(Number(remote.score ?? local.score)),
         tone: remote.tone || local.tone,
         formality: Number(remote.formality ?? local.formality),
         insights: [...local.insights, ...(remote.insights ?? [])].slice(0, 6),
@@ -1075,7 +1073,14 @@ export default function App() {
       {/* HEADER */}
       <header className="app-header">
         <div className="header-left">
-          <button className="icon-btn-ghost" aria-label="Menu"><Menu size={18} /></button>
+          <button
+            className="icon-btn-ghost"
+            aria-label="Go to home page"
+            title="Home"
+            onClick={() => setShowLanding(true)}
+          >
+            <Menu size={18} />
+          </button>
           <div className="wr-logo-mark">
             <svg width="28" height="28" viewBox="0 0 100 100" fill="none">
               <rect width="100" height="100" rx="18" fill="var(--accent-gold)" opacity="0.15"/>
@@ -1083,7 +1088,7 @@ export default function App() {
               <text x="50" y="56" textAnchor="middle" fontFamily="Spectral,serif" fontWeight="600" fontSize="26" fill="var(--accent-gold)">WR</text>
             </svg>
           </div>
-          <h1 className="app-title">WriteRight <span>AI</span></h1>
+          <h1 className="app-title">Voice <span>WriteRight</span></h1>
           <div className="model-badge"><Sparkles size={11} /><span>{HAS_API_KEY ? 'Hybrid Flash-Lite' : 'Offline Mode'}</span></div>
         </div>
         <div className="header-right">
@@ -1209,25 +1214,6 @@ export default function App() {
             <span className="rich-format-hint">Ctrl+B · Ctrl+I · Ctrl+U</span>
           </div>
 
-          {/* Score Panel */}
-          <AnimatePresence>
-            {analysis !== null && plainText.length >= 5 && (
-              <motion.div key="score" initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} exit={{opacity:0,y:10}} className="score-panel">
-                <div className="score-circle" style={{ '--score-deg': `${(analysis.score / 100) * 360}deg` } as any}>
-                  <span className="score-number">{analysis.score}</span>
-                </div>
-                <div className="score-details">
-                  <span className="score-title">Writing Score</span>
-                  <div className="sub-scores">
-                    <div className="score-pill">Clarity: <span>{Math.max(0, Math.min(100, analysis.score - 5))}</span></div>
-                    <div className="score-pill">Grammar: <span>{Math.max(0, Math.min(100, 100 - (analysis.issues.length * 10)))}</span></div>
-                    <div className="score-pill">Style: <span>{Math.max(0, Math.min(100, analysis.score + 3))}</span></div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* View Toggle */}
           {hasFixed && (
             <div className="view-toggle-bar">
@@ -1256,6 +1242,57 @@ export default function App() {
               spellCheck={false}
             />
           </div>
+
+          {/* Paraphrase */}
+          <motion.div initial={{opacity:0,y:12}} animate={{opacity:1,y:0}} transition={{duration:0.3}} className="paraphrase-panel">
+            <div className="paraphrase-title">
+              <span className="paraphrase-title-text">PARAPHRASE</span>
+              <button className="paraphrase-main-btn" disabled={isParaphrasing || plainText.length < 5} onClick={() => generateParaphrase(plainText, 'standard')}>
+                {isParaphrasing ? <RefreshCw size={14} className="spin"/> : <Sparkles size={14}/>}
+                Paraphrase Text
+              </button>
+            </div>
+            <div className="paraphrase-grid">
+              {PARAPHRASE_MODES.map(({key, label, emoji, desc}) => {
+                const val = paraphraseSets?.[key] ?? '';
+                const isLoadingStyle = isParaphrasing && activeParaphraseStyle === key;
+                return (
+                  <motion.div key={key} whileHover={{y:-2}} transition={{duration:0.12}}
+                    className={`para-card${key==='professional'?' para-card--highlighted':''}`}>
+                    <div className="para-card-header">
+                      <button
+                        className="para-style-btn"
+                        onClick={() => generateParaphrase(plainText, key)}
+                        disabled={isParaphrasing || plainText.length < 5}
+                        title={desc}
+                      >
+                        <span className="para-emoji">{emoji}</span><span>{label}</span>
+                      </button>
+                      {val && <button className="para-copy-btn" onClick={()=>copyToClipboard(val,key)} title="Copy">
+                        {copiedKey===key?<Check size={12}/>:<Copy size={12}/>}
+                      </button>}
+                    </div>
+                    <p className="para-style-desc">{desc}</p>
+                    <div className="para-card-body">
+                      {isLoadingStyle
+                        ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Generating...</div>
+                        : val
+                          ? <p className="para-text">{val}</p>
+                          : <p className="para-placeholder">Click this style to generate a paraphrase.</p>}
+                    </div>
+                    {val && <button className="para-use-btn" onClick={()=>{
+                      pushUndo(segments);
+                      setSegments([{ text: val, bold: false, italic: false, underline: false, highlight: null }]);
+                    }}>Use -&gt;</button>}
+                  </motion.div>
+                );
+              })}
+            </div>
+            <div className="paraphrase-footer">
+              <div className={`para-tone-chip ${toneStyleClass}`}><span>{toneEmoji}</span><span className="para-tone-name">{toneLabel||'Neutral'}</span></div>
+              <div className="para-word-count">{wordCount} WORDS - {charCount} CHARS</div>
+            </div>
+          </motion.div>
 
           {/* Status bar */}
           <div className="status-bar">
@@ -1320,56 +1357,6 @@ export default function App() {
           </div>
         </motion.div>
 
-        {/* RIGHT — Paraphrase */}
-        <motion.div initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} transition={{duration:0.3}} className="paraphrase-panel">
-          <div className="paraphrase-title">
-            <span className="paraphrase-title-text">PARAPHRASE</span>
-            <button className="paraphrase-main-btn" disabled={isParaphrasing || plainText.length < 5} onClick={() => generateParaphrase(plainText, 'standard')}>
-              {isParaphrasing ? <RefreshCw size={14} className="spin"/> : <Sparkles size={14}/>}
-              Paraphrase Text
-            </button>
-          </div>
-          <div className="paraphrase-grid">
-            {PARAPHRASE_MODES.map(({key, label, emoji, desc}) => {
-              const val = paraphraseSets?.[key] ?? '';
-              const isLoadingStyle = isParaphrasing && activeParaphraseStyle === key;
-              return (
-                <motion.div key={key} whileHover={{y:-2}} transition={{duration:0.12}}
-                  className={`para-card${key==='professional'?' para-card--highlighted':''}`}>
-                  <div className="para-card-header">
-                    <button
-                      className="para-style-btn"
-                      onClick={() => generateParaphrase(plainText, key)}
-                      disabled={isParaphrasing || plainText.length < 5}
-                      title={desc}
-                    >
-                      <span className="para-emoji">{emoji}</span><span>{label}</span>
-                    </button>
-                    {val && <button className="para-copy-btn" onClick={()=>copyToClipboard(val,key)} title="Copy">
-                      {copiedKey===key?<Check size={12}/>:<Copy size={12}/>}
-                    </button>}
-                  </div>
-                  <p className="para-style-desc">{desc}</p>
-                  <div className="para-card-body">
-                    {isLoadingStyle
-                      ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Generating…</div>
-                      : val
-                        ? <p className="para-text">{val}</p>
-                        : <p className="para-placeholder">Click this style to generate a paraphrase.</p>}
-                  </div>
-                  {val && <button className="para-use-btn" onClick={()=>{
-                    pushUndo(segments);
-                    setSegments([{ text: val, bold: false, italic: false, underline: false, highlight: null }]);
-                  }}>Use →</button>}
-                </motion.div>
-              );
-            })}
-          </div>
-          <div className="paraphrase-footer">
-            <div className={`para-tone-chip ${toneStyleClass}`}><span>{toneEmoji}</span><span className="para-tone-name">{toneLabel||'Neutral'}</span></div>
-            <div className="para-word-count">{wordCount} WORDS · {charCount} CHARS</div>
-          </div>
-        </motion.div>
       </main>
 
       {/* FEATURE PANELS */}

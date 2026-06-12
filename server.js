@@ -58,13 +58,12 @@ app.post('/api/analyze', async (req, res) => {
       body: JSON.stringify({
         model: HAIKU_MODEL,
         max_tokens: 600,
-        system: `You are a fast live writing analyst. Return only JSON with issues, score, tone, formality, and insights. Keep feedback brief and avoid rewriting the whole text.${numericHint(text)}`,
+        system: `You are a fast live writing analyst. Return only JSON with issues, tone, formality, and insights. Keep feedback brief and avoid rewriting the whole text.${numericHint(text)}`,
         messages: [{
           role: 'user',
           content: `Analyze this text for basic grammar, tone, clarity, and writing quality. Return JSON:
 {
   "issues": [{"orig":"exact text span","fix":"replacement","cat":"spelling|grammar|punctuation|style","msg":"short reason"}],
-  "score": 0-100,
   "tone": "short tone label",
   "formality": 0-100,
   "insights": [{"type":"tone|clarity|grammar|style","message":"short observation","suggestion":"short suggestion"}]
@@ -159,5 +158,5 @@ app.get('*', (_req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`WriteRight AI server running on http://localhost:${port}`);
+  console.log(`Voice WriteRight server running on http://localhost:${port}`);
 });

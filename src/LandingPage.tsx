@@ -34,7 +34,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
             </svg>
           </div>
           <span className="text-xl font-semibold tracking-wide" style={{ fontFamily: 'var(--font-display)' }}>
-            WriteRight <span style={{ color: 'var(--accent-gold)' }}>AI</span>
+            Voice <span style={{ color: 'var(--accent-gold)' }}>WriteRight</span>
           </span>
         </div>
         
@@ -67,20 +67,6 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
       <main className="flex-1 flex flex-col items-center justify-center px-6 pt-12 pb-24 relative z-10">
         <div className="max-w-[800px] w-full text-center flex flex-col items-center space-y-8">
           
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider"
-            style={{ 
-              backgroundColor: 'rgba(232, 196, 66, 0.1)', 
-              color: 'var(--accent-gold)',
-              border: '1px solid rgba(232, 196, 66, 0.2)' 
-            }}
-          >
-            <Sparkles size={14} /> Powered by Gemini 2.0 Flash
-          </motion.div>
-
           <motion.h1 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}

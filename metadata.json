@@ -1,5 +1,5 @@
 {
-  "name": "WriteRight AI",
-  "description": "A professional AI-powered editor for grammar correction, style improvement, and tone analysis.",
+  "name": "Voice WriteRight",
+  "description": "A professional AI-powered editor for grammar correction, style improvement, and paraphrasing.",
   "requestFramePermissions": ["microphone"]
 }
