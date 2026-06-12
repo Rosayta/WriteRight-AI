@@ -1,6 +1,7 @@
 import {
   useState, useEffect, useRef, useMemo, useCallback,
 } from 'react';
+import type * as React from 'react';
 import { GoogleGenAI, Type } from '@google/genai';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -17,7 +18,10 @@ import {
 import LandingPage from './LandingPage';
 
 /* ─── Gemini ──────────────────────────────────────────── */
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const HAS_API_KEY = GEMINI_API_KEY.trim().length > 0;
+const HYBRID_MODEL = 'gemini-3.1-flash-lite';
+const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 /* ─── Numeric preservation ────────────────────────────── */
 function extractNumericTokens(text: string): string[] {
@@ -36,13 +40,20 @@ interface Issue {
   cat: 'spelling' | 'grammar' | 'punctuation' | 'style';
   msg: string; offset: number;
 }
+interface WritingInsight {
+  type: 'tone' | 'clarity' | 'grammar' | 'style';
+  message: string;
+  suggestion: string;
+}
 interface AnalysisResult {
   issues: Issue[]; score: number; tone: string; formality: number;
+  insights: WritingInsight[];
 }
 interface ParaphraseSets {
   standard: string; formal: string; casual: string;
   simple: string; fluent: string; professional: string;
 }
+type ParaphraseStyle = keyof ParaphraseSets;
 
 interface DetectorResult {
   aiProbability: number;
@@ -86,12 +97,12 @@ interface CoachResult {
 }
 
 const PARAPHRASE_MODES = [
-  { key: 'standard',     label: 'STANDARD',     emoji: '📝' },
-  { key: 'formal',       label: 'FORMAL',        emoji: '📌' },
-  { key: 'casual',       label: 'CASUAL',        emoji: '😊' },
-  { key: 'simple',       label: 'SIMPLE',        emoji: '💡' },
-  { key: 'fluent',       label: 'FLUENT',        emoji: '⚡' },
-  { key: 'professional', label: 'PROFESSIONAL',  emoji: '💼' },
+  { key: 'standard',     label: 'STANDARD',     emoji: '📝', desc: 'Neutral tone, balanced language' },
+  { key: 'formal',       label: 'FORMAL',        emoji: '📌', desc: 'Professional, business-appropriate tone' },
+  { key: 'professional', label: 'PROFESSIONAL',  emoji: '💼', desc: 'Corporate, official language' },
+  { key: 'casual',       label: 'CASUAL',        emoji: '😊', desc: 'Friendly, conversational tone' },
+  { key: 'simple',       label: 'SIMPLE',        emoji: '💡', desc: 'Easy-to-understand, simplified language' },
+  { key: 'fluent',       label: 'FLUENT',        emoji: '⚡', desc: 'Natural flow, eloquent phrasing' },
 ] as const;
 
 const HIGHLIGHT_COLORS: { key: HighlightColor; label: string; css: string }[] = [
@@ -100,6 +111,168 @@ const HIGHLIGHT_COLORS: { key: HighlightColor; label: string; css: string }[] = 
   { key: 'blue',   label: 'Blue',   css: '#BBDEFB' },
   { key: 'pink',   label: 'Pink',   css: '#F8BBD9' },
 ];
+
+const COMMON_FIXES: Array<{ pattern: RegExp; fix: string; cat: Issue['cat']; msg: string }> = [
+  { pattern: /\bteh\b/gi, fix: 'the', cat: 'spelling', msg: 'Common typo: use "the".' },
+  { pattern: /\badn\b/gi, fix: 'and', cat: 'spelling', msg: 'Common typo: use "and".' },
+  { pattern: /\brecieve\b/gi, fix: 'receive', cat: 'spelling', msg: 'Use "receive".' },
+  { pattern: /\bseperate\b/gi, fix: 'separate', cat: 'spelling', msg: 'Use "separate".' },
+  { pattern: /\bdefinately\b/gi, fix: 'definitely', cat: 'spelling', msg: 'Use "definitely".' },
+  { pattern: /\boccured\b/gi, fix: 'occurred', cat: 'spelling', msg: 'Use "occurred".' },
+  { pattern: /\bwich\b/gi, fix: 'which', cat: 'spelling', msg: 'Use "which".' },
+  { pattern: /\bcant\b/gi, fix: "can't", cat: 'grammar', msg: 'Use the contraction with an apostrophe.' },
+  { pattern: /\bdont\b/gi, fix: "don't", cat: 'grammar', msg: 'Use the contraction with an apostrophe.' },
+  { pattern: /\bwont\b/gi, fix: "won't", cat: 'grammar', msg: 'Use the contraction with an apostrophe.' },
+  { pattern: /\bim\b/gi, fix: "I'm", cat: 'grammar', msg: 'Capitalize and punctuate "I\'m".' },
+  { pattern: /\bi\b/g, fix: 'I', cat: 'grammar', msg: 'Capitalize the pronoun "I".' },
+  { pattern: / {2,}/g, fix: ' ', cat: 'punctuation', msg: 'Use a single space.' },
+  { pattern: /\s+([,.;:!?])/g, fix: '$1', cat: 'punctuation', msg: 'Remove the space before punctuation.' },
+  { pattern: /([,.;:!?])([A-Za-z])/g, fix: '$1 $2', cat: 'punctuation', msg: 'Add a space after punctuation.' },
+  { pattern: /\b(\w+)\s+\1\b/gi, fix: '$1', cat: 'style', msg: 'Remove repeated adjacent words.' },
+];
+
+function preserveCase(original: string, replacement: string): string {
+  if (original.toUpperCase() === original) return replacement.toUpperCase();
+  if (original[0]?.toUpperCase() === original[0]) {
+    return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+  }
+  return replacement;
+}
+
+function getRuleReplacement(
+  original: string,
+  rule: { pattern: RegExp; fix: string },
+): string {
+  const replaced = original.replace(rule.pattern, rule.fix);
+  return rule.fix.includes('$') ? replaced : preserveCase(original, replaced);
+}
+
+function getLocalIssues(content: string): Array<Issue & { offset: number }> {
+  const issues: Array<Issue & { offset: number }> = [];
+  const seen = new Set<string>();
+
+  for (const rule of COMMON_FIXES) {
+    const regex = new RegExp(rule.pattern.source, rule.pattern.flags);
+    for (const match of content.matchAll(regex)) {
+      const orig = match[0];
+      const offset = match.index ?? -1;
+      if (offset < 0) continue;
+      const fix = getRuleReplacement(orig, rule);
+      if (fix === orig) continue;
+      const key = `${offset}:${orig}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      issues.push({ orig, fix, cat: rule.cat, msg: rule.msg, offset });
+    }
+  }
+
+  return issues.sort((a, b) => a.offset - b.offset).slice(0, 80);
+}
+
+function buildLocalAnalysis(content: string): AnalysisResult {
+  const issues = getLocalIssues(content);
+  const sentenceCount = Math.max(1, content.split(/[.!?]+/).filter(Boolean).length);
+  const words = content.trim().split(/\s+/).filter(Boolean);
+  const avgSentenceLength = words.length / sentenceCount;
+  const score = Math.max(45, Math.min(100, 98 - issues.length * 8 - Math.max(0, avgSentenceLength - 28)));
+  const formality = /\b(please|kindly|regarding|sincerely|therefore|however)\b/i.test(content) ? 72 : 45;
+  const tone = formality > 65 ? 'Professional' : /\bthanks|thank you|happy to|glad\b/i.test(content) ? 'Friendly' : 'Neutral';
+  const insights: WritingInsight[] = [];
+  if (avgSentenceLength > 28) {
+    insights.push({
+      type: 'clarity',
+      message: 'Some sentences are running long.',
+      suggestion: 'Split longer sentences so each idea lands cleanly.',
+    });
+  }
+  if (issues.length > 0) {
+    insights.push({
+      type: 'grammar',
+      message: `${issues.length} local grammar or spelling ${issues.length === 1 ? 'issue' : 'issues'} found.`,
+      suggestion: 'Review the underlined text and apply the suggested corrections.',
+    });
+  }
+  return { issues, score: Math.round(score), tone, formality, insights };
+}
+
+function applyLocalFixes(content: string): string {
+  return COMMON_FIXES.reduce((text, rule) => (
+    text.replace(rule.pattern, match => getRuleReplacement(match, rule))
+  ), content).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function localParaphrases(content: string): ParaphraseSets {
+  const cleaned = applyLocalFixes(content);
+  const lowerLead = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  return {
+    standard: cleaned,
+    formal: `Please note that ${lowerLead}`,
+    casual: `Here is the idea: ${lowerLead}`,
+    simple: cleaned.replace(/\butilize\b/gi, 'use').replace(/\bapproximately\b/gi, 'about'),
+    fluent: cleaned.replace(/\s+/g, ' ').trim(),
+    professional: `Thank you for your attention. ${cleaned}`,
+  };
+}
+
+function localDetector(content: string): DetectorResult {
+  const markers = ['it is important to note', 'in conclusion', 'furthermore', 'moreover', 'this highlights', 'delve'];
+  const hits = markers.filter(marker => content.toLowerCase().includes(marker));
+  const aiProbability = Math.min(86, 25 + hits.length * 14 + (content.split(/[.!?]/).filter(s => s.trim().length > 120).length * 8));
+  return {
+    aiProbability,
+    humanProbability: 100 - aiProbability,
+    verdict: aiProbability > 65 ? 'likely-ai' : aiProbability < 40 ? 'likely-human' : 'mixed',
+    confidence: hits.length >= 3 ? 'medium' : 'low',
+    signals: hits.length ? hits.map(hit => `Uses "${hit}"`).slice(0, 4) : ['No strong AI markers found', 'Heuristic offline estimate only'],
+    highlightedPhrases: hits.slice(0, 5),
+  };
+}
+
+function localOriginality(content: string): PlagiarismResult {
+  const common = ['at the end of the day', 'think outside the box', 'game changer', 'in conclusion', 'it is important to note'];
+  const flaggedPhrases = common
+    .filter(phrase => content.toLowerCase().includes(phrase))
+    .map(phrase => ({ phrase, reason: 'This phrase is widely used and may sound generic.', type: 'common-expression' as const }));
+  const riskLevel: PlagiarismResult['riskLevel'] = flaggedPhrases.length > 3 ? 'high' : flaggedPhrases.length > 0 ? 'medium' : 'low';
+  return {
+    originalityScore: Math.max(55, 96 - flaggedPhrases.length * 12),
+    riskLevel,
+    flaggedPhrases,
+    suggestions: flaggedPhrases.length ? ['Replace generic phrases with specific details.', 'Add concrete examples or personal context.'] : ['Add specific examples to make the writing more distinctive.'],
+    summary: 'Offline originality mode checks generic phrases only; it does not compare against external databases.',
+  };
+}
+
+function localCoach(content: string): CoachResult {
+  const words = content.trim().split(/\s+/).filter(Boolean);
+  const issues = getLocalIssues(content);
+  const longSentences = content.split(/[.!?]/).filter(sentence => sentence.trim().split(/\s+/).length > 28).length;
+  const grade: CoachResult['overallGrade'] = issues.length === 0 && longSentences === 0 ? 'A' : issues.length < 4 ? 'B' : 'C';
+  return {
+    overallAssessment: `Offline review found ${issues.length} local writing issue${issues.length === 1 ? '' : 's'} across ${words.length} words.`,
+    overallGrade: grade,
+    strengths: ['Clear enough for a quick local review', words.length > 80 ? 'Enough detail to assess structure' : 'Concise and easy to scan'],
+    improvements: [
+      { area: 'clarity', issue: issues[0]?.msg ?? 'Some sentences may benefit from sharper wording.', suggestion: 'Apply the local fixes, then read once for flow.', priority: issues.length ? 'high' : 'low' },
+      { area: 'flow', issue: longSentences ? 'Some sentences are long.' : 'Transitions can be strengthened.', suggestion: 'Split long sentences and add natural transitions.', priority: longSentences ? 'medium' : 'low' },
+    ],
+    quickTip: 'Use concrete details where the text feels generic.',
+    targetAudience: 'General readers',
+  };
+}
+
+function localHumanize(content: string): HumanizerResult {
+  const humanized = applyLocalFixes(content)
+    .replace(/\bIt is important to note that\b/gi, 'The key thing is')
+    .replace(/\bIn conclusion,\s*/gi, 'Overall, ')
+    .replace(/\bFurthermore,\s*/gi, 'Also, ')
+    .replace(/\butilize\b/gi, 'use');
+  return {
+    humanized,
+    changesCount: humanized === content ? 0 : 1,
+    techniquesSummary: 'Applied offline cleanup and replaced a few formal stock phrases.',
+  };
+}
 
 /* ─── DOM helpers ─────────────────────────────────────── */
 function domOffsetToPlain(container: HTMLElement, targetNode: Node, nodeOffset: number): number {
@@ -156,6 +329,7 @@ export default function App() {
   const [paraphraseSets,     setParaphraseSets]     = useState<ParaphraseSets | null>(null);
   const [isParaphrasing,     setIsParaphrasing]     = useState(false);
   const [copiedKey,          setCopiedKey]          = useState<string | null>(null);
+  const [activeParaphraseStyle, setActiveParaphraseStyle] = useState<ParaphraseStyle | null>(null);
 
   /* View Toggle */
   const originalTextRef = useRef('');
@@ -333,69 +507,138 @@ export default function App() {
 
   /* ── Analysis ────────────────────────────────────────── */
   useEffect(() => {
+    analyzeText(plainText);
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => analyzeText(plainText), 900);
+    debounceTimer.current = setTimeout(() => {
+      void analyzeWithHaiku(plainText);
+    }, 500);
     return () => { if (debounceTimer.current) clearTimeout(debounceTimer.current); };
   }, [plainText]);
 
-  const analyzeText = async (content: string) => {
+  const analyzeText = (content: string) => {
     if (content.length < 5) { setAnalysis(null); setStatusMsg(''); return; }
-    setIsAnalyzing(true);
     try {
-      const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{ role: 'user', parts: [{ text: `Analyze this text: "${content}"` }] }],
-        config: {
-          systemInstruction: `You are a professional editor. Analyze for spelling, grammar, punctuation, and style issues. Return JSON: issues (array of {orig, fix, cat, msg}), score (0-100), tone (string), formality (0-100). cat must be one of: spelling, grammar, punctuation, style.${numericHint(content)} Return only JSON.`,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              issues: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { orig:{type:Type.STRING}, fix:{type:Type.STRING}, cat:{type:Type.STRING}, msg:{type:Type.STRING} }, required:['orig','fix','cat','msg'] } },
-              score: { type: Type.NUMBER }, tone: { type: Type.STRING }, formality: { type: Type.NUMBER },
-            },
-            required: ['issues','score','tone','formality'],
-          },
-        },
-      });
-      const data = JSON.parse(response.text || '{}') as AnalysisResult;
-      const usedRanges: [number,number][] = [];
-      const withOffsets = data.issues.map(iss => {
-        let from = 0, offset = -1;
+      const data = buildLocalAnalysis(content);
+      setAnalysis(data);
+      if (data.formality !== undefined) setFormalityLevel(data.formality);
+      const t = new Date().toLocaleTimeString();
+      setStatusMsg(`${t} - offline check - ${data.issues.length} ${data.issues.length === 1 ? 'issue' : 'issues'} found`);
+    } catch (err) {
+      console.error('Analysis error:', err);
+      setStatusMsg('Offline analysis failed');
+    }
+  };
+
+  const locateIssueOffsets = (issues: Array<Omit<Issue, 'offset'> | Issue>, content: string): Issue[] => {
+    const usedRanges: [number, number][] = [];
+    return issues
+      .map(iss => {
+        if ('offset' in iss && iss.offset >= 0) return iss as Issue;
+        let from = 0;
+        let offset = -1;
         while (from < content.length) {
           const idx = content.indexOf(iss.orig, from);
           if (idx === -1) break;
-          const overlaps = usedRanges.some(([s,e]) => idx < e && idx + iss.orig.length > s);
-          if (!overlaps) { offset = idx; usedRanges.push([idx, idx + iss.orig.length]); break; }
+          const overlaps = usedRanges.some(([start, end]) => idx < end && idx + iss.orig.length > start);
+          if (!overlaps) {
+            offset = idx;
+            usedRanges.push([idx, idx + iss.orig.length]);
+            break;
+          }
           from = idx + 1;
         }
-        return { ...iss, offset };
-      }).filter(i => i.offset !== -1);
-      setAnalysis({ ...data, issues: withOffsets });
-      if (data.formality !== undefined) setFormalityLevel(data.formality);
+        return { ...iss, offset } as Issue;
+      })
+      .filter(iss => iss.offset >= 0);
+  };
+
+  const mergeIssues = (localIssues: Issue[], remoteIssues: Issue[]): Issue[] => {
+    const seen = new Set(localIssues.map(issue => `${issue.offset}:${issue.orig.toLowerCase()}`));
+    return [
+      ...localIssues,
+      ...remoteIssues.filter(issue => {
+        const key = `${issue.offset}:${issue.orig.toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }),
+    ].sort((a, b) => a.offset - b.offset).slice(0, 80);
+  };
+
+  const analyzeWithHaiku = async (content: string) => {
+    if (content.length < 5) return;
+    setIsAnalyzing(true);
+    try {
+      const local = buildLocalAnalysis(content);
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: content,
+        }),
+      });
+      if (response.status === 503) return;
+      if (!response.ok) throw new Error(`Haiku analysis failed: ${response.status}`);
+      const remote = await response.json() as Partial<AnalysisResult>;
+      const remoteIssues = locateIssueOffsets((remote.issues ?? []) as Issue[], content);
+      const merged: AnalysisResult = {
+        issues: mergeIssues(local.issues, remoteIssues),
+        score: Math.round(Number(remote.score ?? local.score)),
+        tone: remote.tone || local.tone,
+        formality: Number(remote.formality ?? local.formality),
+        insights: [...local.insights, ...(remote.insights ?? [])].slice(0, 6),
+      };
+      setAnalysis(merged);
+      setFormalityLevel(merged.formality);
       const t = new Date().toLocaleTimeString();
-      setStatusMsg(`${t} · ${withOffsets.length} ${withOffsets.length === 1 ? 'issue' : 'issues'} found`);
+      setStatusMsg(`${t} - Haiku live check - ${merged.issues.length} ${merged.issues.length === 1 ? 'issue' : 'issues'} found`);
     } catch (err) {
-      console.error('Analysis error:', err);
-      setStatusMsg('Analysis failed — check connection');
-    } finally { setIsAnalyzing(false); }
+      console.error('Haiku analysis error:', err);
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   /* ── Fix All ─────────────────────────────────────────── */
   const fixAll = async () => {
-    if (isFixing || hasFixed || plainText.length < 5) return;
+    if (isFixing || plainText.length < 5) return;
     originalTextRef.current = plainText;
-    setIsFixing(true); setStatusMsg('Fixing errors…');
+    setIsFixing(true); setStatusMsg(HAS_API_KEY ? 'Fixing with low-cost AI...' : 'Applying offline fixes...');
     try {
+      if (!HAS_API_KEY) {
+        const localDiffs = getLocalIssues(plainText).map(({ orig, fix, offset }) => ({ orig, fix, offset }));
+        const correctedSegs = localDiffs.length ? applyCorrections(segments, localDiffs) : segments;
+        const finalText = toPlainText(correctedSegs);
+        const changed = finalText !== plainText;
+        if (!changed) {
+          setHasFixed(false);
+          setStatusMsg('No offline fixes needed');
+          return;
+        }
+        pushUndo(segments);
+        setSegments(correctedSegs);
+        lastFixedRef.current = finalText;
+        setHasFixed(true); setAnalysis(null);
+        setStatusMsg('Offline fixes applied');
+        setHistoryItems(prev => {
+          const updated = [{ text: finalText, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 50);
+          try { localStorage.setItem('wr_history', JSON.stringify(updated)); } catch {}
+          return updated;
+        });
+        return;
+      }
+
       const hint = numericHint(plainText);
       const r1 = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: HYBRID_MODEL,
         contents: [{ role:'user', parts:[{ text:`Fix all errors. Return ONLY corrected text.${hint}\n\n${plainText}` }] }],
       });
       const corrected = r1.text?.trim() || plainText;
 
       const r2 = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: HYBRID_MODEL,
         contents: [{ role:'user', parts:[{ text:`Compare original and corrected text. List exact word-level changes as JSON array of {orig, fix}. Original: "${plainText}" Corrected: "${corrected}"` }] }],
         config: {
           responseMimeType: 'application/json',
@@ -412,56 +655,71 @@ export default function App() {
           if (off !== -1) { diffs.push({ ...d, offset: off }); from = off + d.orig.length; }
         }
       } catch {
-        pushUndo(segments);
-        const base = segments[0] ?? emptySegment();
-        setSegments([{ ...base, text: corrected }]);
-        lastFixedRef.current = corrected;
-        setHasFixed(true); setAnalysis(null); setStatusMsg('Text corrected');
-        generateParaphraseSets(corrected);
-        return;
+        diffs = [];
       }
 
       pushUndo(segments);
-      const correctedSegs = applyCorrections(segments, diffs);
+      const correctedSegs = diffs.length ? applyCorrections(segments, diffs) : [{ ...(segments[0] ?? emptySegment()), text: corrected }];
       setSegments(correctedSegs);
       const finalText = toPlainText(correctedSegs);
       lastFixedRef.current = finalText;
-      setHasFixed(true); setAnalysis(null);
-      setStatusMsg('Text corrected — formatting preserved ✓');
+      const changed = finalText !== plainText;
+      setHasFixed(changed);
+      setAnalysis(null);
+      setStatusMsg(changed ? 'Text corrected with low-cost AI' : 'No fixes needed');
       setHistoryItems(prev => {
         const updated = [{ text: finalText, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 50);
         try { localStorage.setItem('wr_history', JSON.stringify(updated)); } catch {}
         return updated;
       });
-      generateParaphraseSets(finalText);
     } catch (err) {
-      console.error('Fix error:', err); setStatusMsg('Error during fix');
+      console.error('Fix error:', err);
+      const corrected = applyLocalFixes(plainText);
+      const changed = corrected !== plainText;
+      if (changed) {
+        pushUndo(segments);
+        setSegments([{ ...(segments[0] ?? emptySegment()), text: corrected }]);
+      }
+      lastFixedRef.current = corrected;
+      setHasFixed(changed);
+      setAnalysis(null);
+      setStatusMsg(changed ? 'API unavailable - offline fixes applied' : 'API unavailable - no offline fixes needed');
     } finally { setIsFixing(false); }
   };
 
   /* ── Paraphrase ──────────────────────────────────────── */
-  const generateParaphraseSets = async (content: string) => {
+  const generateParaphrase = async (content: string, style: ParaphraseStyle) => {
+    if (content.length < 5) return;
     setIsParaphrasing(true);
-    const hint = numericHint(content);
+    setActiveParaphraseStyle(style);
     try {
-      const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{ role:'user', parts:[{ text:`Provide 6 paraphrased versions in JSON with keys: standard, formal, casual, simple, fluent, professional.${hint} Text: "${content}"` }] }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              standard:{type:Type.STRING}, formal:{type:Type.STRING}, casual:{type:Type.STRING},
-              simple:{type:Type.STRING}, fluent:{type:Type.STRING}, professional:{type:Type.STRING},
-            },
-            required: ['standard','formal','casual','simple','fluent','professional'],
-          },
+      const mode = PARAPHRASE_MODES.find(item => item.key === style);
+      const response = await fetch('/api/paraphrase', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
         },
+        body: JSON.stringify({
+          text: content,
+          style,
+          tone: mode?.desc ?? style,
+        }),
       });
-      setParaphraseSets(JSON.parse(response.text || '{}') as ParaphraseSets);
-    } catch (err) { console.error('Paraphrase error:', err);
-    } finally { setIsParaphrasing(false); }
+      if (!response.ok) throw new Error(`OpenAI paraphrase failed: ${response.status}`);
+      const parsed = await response.json() as { paraphrasedText?: string };
+      const value = (parsed.paraphrasedText ?? '').trim();
+      if (!value) throw new Error('OpenAI returned an empty paraphrase');
+      setParaphraseSets(prev => ({ ...(prev ?? localParaphrases(content)), [style]: value }));
+      setStatusMsg(`${mode?.label ?? style.toUpperCase()} paraphrase ready`);
+    } catch (err) {
+      console.error('Paraphrase error:', err);
+      const fallback = localParaphrases(content)[style];
+      setParaphraseSets(prev => ({ ...(prev ?? localParaphrases(content)), [style]: fallback }));
+      setStatusMsg('OpenAI unavailable - offline paraphrase generated');
+    } finally {
+      setIsParaphrasing(false);
+      setActiveParaphraseStyle(null);
+    }
   };
 
   /* ── Make Friendly ───────────────────────────────────── */
@@ -469,15 +727,28 @@ export default function App() {
     if (plainText.length < 5 || isFixing) return;
     setIsFixing(true);
     try {
+      if (!HAS_API_KEY) {
+        const friendly = localParaphrases(plainText).casual;
+        pushUndo(segments);
+        setSegments([{ text: friendly, bold: false, italic: false, underline: false, highlight: null }]);
+        setStatusMsg('Offline friendly rewrite applied');
+        return;
+      }
+
       const hint = numericHint(plainText);
       const r = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: HYBRID_MODEL,
         contents: [{ role:'user', parts:[{ text:`Rewrite to be warm and friendly, same meaning. Return ONLY the rewritten text.${hint}\n\n${plainText}` }] }],
       });
       const friendly = r.text?.trim() || plainText;
       pushUndo(segments);
       setSegments([{ text: friendly, bold: false, italic: false, underline: false, highlight: null }]);
-    } catch (err) { console.error('Make friendly error:', err);
+    } catch (err) {
+      console.error('Make friendly error:', err);
+      const friendly = localParaphrases(plainText).casual;
+      pushUndo(segments);
+      setSegments([{ text: friendly, bold: false, italic: false, underline: false, highlight: null }]);
+      setStatusMsg('API unavailable - offline friendly rewrite applied');
     } finally { setIsFixing(false); }
   };
 
@@ -487,51 +758,37 @@ export default function App() {
     setIsDetecting(true);
     setShowDetector(true);
     try {
+      if (!HAS_API_KEY) {
+        setDetectorResult(localDetector(plainText));
+        setStatusMsg('Offline AI detector estimate ready');
+        return;
+      }
+
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
+        model: HYBRID_MODEL,
         contents: [{
           role: 'user',
-          parts: [{ text: `Analyze this text and determine if it was
-            written by AI or a human. Look for: overly uniform sentence
-            length, lack of personal voice, generic transitions,
-            unnaturally perfect grammar, absence of colloquialisms,
-            overly structured paragraphs. Text: "${plainText}"` }]
+          parts: [{ text: `Analyze this text and determine if it was written by AI or a human. Look for overly uniform sentence length, lack of personal voice, generic transitions, unnaturally perfect grammar, absence of colloquialisms, overly structured paragraphs. Text: "${plainText}"` }]
         }],
         config: {
-          systemInstruction: `You are an AI content detector. Analyze
-            the provided text and return a JSON object. Be analytical
-            and objective. verdict must be exactly one of:
-            'likely-ai', 'likely-human', 'mixed', 'uncertain'.
-            confidence must be exactly one of: 'high','medium','low'.
-            signals should be 2-4 short bullet-point reasons (max 10
-            words each). highlightedPhrases should be up to 5 exact
-            short phrases (3-6 words) from the text that feel AI-like.
-            Return only valid JSON.`,
+          systemInstruction: `You are an AI content detector. Analyze the provided text and return a JSON object. verdict must be exactly one of: 'likely-ai', 'likely-human', 'mixed', 'uncertain'. confidence must be exactly one of: 'high','medium','low'. Return only valid JSON.`,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              aiProbability:      { type: Type.NUMBER },
-              humanProbability:   { type: Type.NUMBER },
-              verdict:            { type: Type.STRING },
-              confidence:         { type: Type.STRING },
-              signals:            { type: Type.ARRAY,
-                items: { type: Type.STRING } },
-              highlightedPhrases: { type: Type.ARRAY,
-                items: { type: Type.STRING } },
+              aiProbability: { type: Type.NUMBER }, humanProbability: { type: Type.NUMBER }, verdict: { type: Type.STRING }, confidence: { type: Type.STRING },
+              signals: { type: Type.ARRAY, items: { type: Type.STRING } }, highlightedPhrases: { type: Type.ARRAY, items: { type: Type.STRING } },
             },
-            required: ['aiProbability','humanProbability',
-              'verdict','confidence','signals','highlightedPhrases'],
+            required: ['aiProbability','humanProbability','verdict','confidence','signals','highlightedPhrases'],
           },
         },
       });
-      const data = JSON.parse(response.text || '{}') as DetectorResult;
-      setDetectorResult(data);
+      setDetectorResult(JSON.parse(response.text || '{}') as DetectorResult);
     } catch (err) {
       console.error('AI detector error:', err);
-    } finally {
-      setIsDetecting(false);
-    }
+      setDetectorResult(localDetector(plainText));
+      setStatusMsg('API unavailable - offline detector estimate ready');
+    } finally { setIsDetecting(false); }
   };
 
   const runPlagiarismCheck = async () => {
@@ -539,123 +796,81 @@ export default function App() {
     setIsCheckingPlag(true);
     setShowPlagiarism(true);
     try {
+      if (!HAS_API_KEY) {
+        setPlagiarismResult(localOriginality(plainText));
+        setStatusMsg('Offline originality estimate ready');
+        return;
+      }
+
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{
-          role: 'user',
-          parts: [{ text: `Analyze this text for originality. Flag
-            phrases that sound like well-known quotes, generic
-            templates, or overly common expressions. Text:
-            "${plainText}"` }]
-        }],
+        model: HYBRID_MODEL,
+        contents: [{ role: 'user', parts: [{ text: `Analyze this text for originality. Flag phrases that sound like well-known quotes, generic templates, or overly common expressions. Text: "${plainText}"` }] }],
         config: {
-          systemInstruction: `You are an originality analyzer. Detect
-            phrases that lack originality: common idioms presented as
-            original thought, generic filler phrases, well-known quotes,
-            or template-like sentence structures. riskLevel must be
-            exactly: 'low', 'medium', or 'high'. type for each flagged
-            phrase must be exactly one of: 'common-expression',
-            'generic-template', 'known-quote'. Return only valid JSON.`,
+          systemInstruction: `You are an originality analyzer. Detect phrases that lack originality. riskLevel must be exactly: 'low', 'medium', or 'high'. type must be one of: 'common-expression', 'generic-template', 'known-quote'. Return only valid JSON.`,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              originalityScore: { type: Type.NUMBER },
-              riskLevel: { type: Type.STRING },
-              flaggedPhrases: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    phrase: { type: Type.STRING },
-                    reason: { type: Type.STRING },
-                    type:   { type: Type.STRING },
-                  },
-                  required: ['phrase','reason','type'],
-                },
-              },
-              suggestions: { type: Type.ARRAY,
-                items: { type: Type.STRING } },
-              summary: { type: Type.STRING },
+              originalityScore: { type: Type.NUMBER }, riskLevel: { type: Type.STRING },
+              flaggedPhrases: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { phrase: { type: Type.STRING }, reason: { type: Type.STRING }, type: { type: Type.STRING } }, required: ['phrase','reason','type'] } },
+              suggestions: { type: Type.ARRAY, items: { type: Type.STRING } }, summary: { type: Type.STRING },
             },
-            required: ['originalityScore','riskLevel',
-              'flaggedPhrases','suggestions','summary'],
+            required: ['originalityScore','riskLevel','flaggedPhrases','suggestions','summary'],
           },
         },
       });
-      const data = JSON.parse(response.text || '{}') as PlagiarismResult;
-      setPlagiarismResult(data);
+      setPlagiarismResult(JSON.parse(response.text || '{}') as PlagiarismResult);
     } catch (err) {
       console.error('Plagiarism check error:', err);
-    } finally {
-      setIsCheckingPlag(false);
-    }
+      setPlagiarismResult(localOriginality(plainText));
+      setStatusMsg('API unavailable - offline originality estimate ready');
+    } finally { setIsCheckingPlag(false); }
   };
 
   const humanizeText = async () => {
     if (plainText.length < 20 || isHumanizing || isFixing) return;
     setIsHumanizing(true);
     try {
+      if (!HAS_API_KEY) {
+        const data = localHumanize(plainText);
+        pushUndo(segments);
+        setSegments([{ text: data.humanized, bold: false, italic: false, underline: false, highlight: null }]);
+        setHumanizerResult(data);
+        setShowHumanizerInfo(true);
+        setHasFixed(false); lastFixedRef.current = ''; setAnalysis(null); setParaphraseSets(null);
+        setStatusMsg('Offline humanizer applied');
+        setTimeout(() => setShowHumanizerInfo(false), 5000);
+        return;
+      }
+
       const hint = numericHint(plainText);
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{
-          role: 'user',
-          parts: [{ text: `Rewrite this text to sound authentically
-            human-written. Apply these techniques:
-            1. Vary sentence lengths dramatically — mix very short
-               sentences with longer ones
-            2. Add natural transitions and connective phrases
-               ("honestly", "the thing is", "what I mean is")
-            3. Introduce subtle imperfections — contractions,
-               occasional informality
-            4. Replace generic AI phrases ("it is important to note",
-               "in conclusion", "this highlights") with natural speech
-            5. Add specificity and personality where generic
-            6. Break up overly uniform paragraph structures
-            7. Preserve the core meaning and all facts exactly
-            ${hint}
-            Return JSON with: humanized (the rewritten text as a
-            string), changesCount (integer), techniquesSummary
-            (one sentence).
-            Text to humanize: "${plainText}"` }]
-        }],
+        model: HYBRID_MODEL,
+        contents: [{ role: 'user', parts: [{ text: `Rewrite this text to sound authentically human-written. Vary sentence lengths, use natural transitions, preserve facts exactly. ${hint} Return JSON with: humanized, changesCount, techniquesSummary. Text to humanize: "${plainText}"` }] }],
         config: {
           responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              humanized:         { type: Type.STRING },
-              changesCount:      { type: Type.NUMBER },
-              techniquesSummary: { type: Type.STRING },
-            },
-            required: ['humanized','changesCount','techniquesSummary'],
-          },
+          responseSchema: { type: Type.OBJECT, properties: { humanized: { type: Type.STRING }, changesCount: { type: Type.NUMBER }, techniquesSummary: { type: Type.STRING } }, required: ['humanized','changesCount','techniquesSummary'] },
         },
       });
       const data = JSON.parse(response.text || '{}') as HumanizerResult;
       if (data.humanized) {
         pushUndo(segments);
-        setSegments([{
-          text: data.humanized,
-          bold: false, italic: false,
-          underline: false, highlight: null,
-        }]);
+        setSegments([{ text: data.humanized, bold: false, italic: false, underline: false, highlight: null }]);
         setHumanizerResult(data);
         setShowHumanizerInfo(true);
-        setHasFixed(false);
-        lastFixedRef.current = '';
-        setAnalysis(null);
-        setParaphraseSets(null);
-        setStatusMsg('Text humanized — sounds more natural ✓');
+        setHasFixed(false); lastFixedRef.current = ''; setAnalysis(null); setParaphraseSets(null);
+        setStatusMsg('Text humanized with low-cost AI');
         setTimeout(() => setShowHumanizerInfo(false), 5000);
       }
     } catch (err) {
       console.error('Humanizer error:', err);
-      setStatusMsg('Humanizer failed — try again');
-    } finally {
-      setIsHumanizing(false);
-    }
+      const data = localHumanize(plainText);
+      pushUndo(segments);
+      setSegments([{ text: data.humanized, bold: false, italic: false, underline: false, highlight: null }]);
+      setHumanizerResult(data);
+      setShowHumanizerInfo(true);
+      setStatusMsg('API unavailable - offline humanizer applied');
+    } finally { setIsHumanizing(false); }
   };
 
   const runWritingCoach = async () => {
@@ -663,61 +878,35 @@ export default function App() {
     setIsCoaching(true);
     setShowCoach(true);
     try {
+      if (!HAS_API_KEY) {
+        setCoachResult(localCoach(plainText));
+        setStatusMsg('Offline writing coach ready');
+        return;
+      }
+
       const response = await genAI.models.generateContent({
-        model: 'gemini-2.0-flash-lite',
-        contents: [{
-          role: 'user',
-          parts: [{ text: `Act as a professional writing coach and
-            editor. Give detailed, honest, constructive feedback on
-            this text. Be specific — reference the actual writing,
-            not generic advice. Text: "${plainText}"` }]
-        }],
+        model: HYBRID_MODEL,
+        contents: [{ role: 'user', parts: [{ text: `Act as a professional writing coach and editor. Give detailed, honest, constructive feedback on this text. Text: "${plainText}"` }] }],
         config: {
-          systemInstruction: `You are a professional writing coach
-            with 20 years of editorial experience. Give honest,
-            specific, and constructive feedback. overallGrade must
-            be exactly: 'A', 'B', 'C', or 'D'. improvements area
-            must be exactly one of: 'structure', 'clarity',
-            'engagement', 'voice', 'conciseness', 'flow'. priority
-            must be exactly: 'high', 'medium', or 'low'. Return
-            max 3 improvements, sorted high → low priority. Be
-            encouraging but direct. Return only valid JSON.`,
+          systemInstruction: `You are a professional writing coach. overallGrade must be exactly: 'A', 'B', 'C', or 'D'. improvements area must be one of: 'structure', 'clarity', 'engagement', 'voice', 'conciseness', 'flow'. priority must be: 'high', 'medium', or 'low'. Return only valid JSON.`,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              overallAssessment: { type: Type.STRING },
-              overallGrade:      { type: Type.STRING },
-              strengths:         { type: Type.ARRAY,
-                items: { type: Type.STRING } },
-              improvements: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    area:       { type: Type.STRING },
-                    issue:      { type: Type.STRING },
-                    suggestion: { type: Type.STRING },
-                    priority:   { type: Type.STRING },
-                  },
-                  required: ['area','issue','suggestion','priority'],
-                },
-              },
-              quickTip:       { type: Type.STRING },
-              targetAudience: { type: Type.STRING },
+              overallAssessment: { type: Type.STRING }, overallGrade: { type: Type.STRING }, strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+              improvements: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { area: { type: Type.STRING }, issue: { type: Type.STRING }, suggestion: { type: Type.STRING }, priority: { type: Type.STRING } }, required: ['area','issue','suggestion','priority'] } },
+              quickTip: { type: Type.STRING }, targetAudience: { type: Type.STRING },
             },
-            required: ['overallAssessment','overallGrade',
-              'strengths','improvements','quickTip','targetAudience'],
+            required: ['overallAssessment','overallGrade','strengths','improvements','quickTip','targetAudience'],
           },
         },
       });
-      const data = JSON.parse(response.text || '{}') as CoachResult;
-      setCoachResult(data);
+      setCoachResult(JSON.parse(response.text || '{}') as CoachResult);
     } catch (err) {
       console.error('Writing coach error:', err);
-    } finally {
-      setIsCoaching(false);
-    }
+      setCoachResult(localCoach(plainText));
+      setStatusMsg('API unavailable - offline writing coach ready');
+    } finally { setIsCoaching(false); }
   };
 
   /* ── Clear ───────────────────────────────────────────── */
@@ -895,7 +1084,7 @@ export default function App() {
             </svg>
           </div>
           <h1 className="app-title">WriteRight <span>AI</span></h1>
-          <div className="model-badge"><Sparkles size={11} /><span>Gemini Flash</span></div>
+          <div className="model-badge"><Sparkles size={11} /><span>{HAS_API_KEY ? 'Hybrid Flash-Lite' : 'Offline Mode'}</span></div>
         </div>
         <div className="header-right">
           <div className="stat-pill">Words: <strong>{wordCount}</strong></div>
@@ -964,9 +1153,9 @@ export default function App() {
           {/* Toolbar */}
           <div className="editor-toolbar">
             <motion.button whileHover={{scale:1.02}} whileTap={{scale:0.97}} onClick={fixAll}
-              disabled={hasFixed||isFixing||plainText.length<5}
+              disabled={isFixing||plainText.length<5}
               className={`fix-btn${hasFixed?' fix-btn--fixed':''}${isFixing?' fix-btn--loading':''}`}>
-              {isFixing ? <><RefreshCw size={14} className="spin"/> Fixing…</> : hasFixed ? <><span>✅</span> Fixed!</> : <><span className="fix-btn-star">✳</span> FIX ALL ERRORS</>}
+              {isFixing ? <><RefreshCw size={14} className="spin"/> Fixing…</> : hasFixed ? <><span>✅</span> CHECK AGAIN</> : <><span className="fix-btn-star">✳</span> FIX ALL ERRORS</>}
             </motion.button>
             <div className="toolbar-actions">
               <button className="tool-btn" onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)"><Undo2 size={15}/></button>
@@ -1081,6 +1270,35 @@ export default function App() {
             }
           </div>
 
+          {(analysis?.issues.length || analysis?.insights.length) ? (
+            <div className="suggestions-panel">
+              <div className="suggestions-header">
+                <span>Suggestions</span>
+                <small>Offline grammar + live insights when configured</small>
+              </div>
+              <div className="suggestions-list">
+                {analysis.issues.slice(0, 4).map((issue, index) => (
+                  <div key={`${issue.offset}-${issue.orig}-${index}`} className={`suggestion-item suggestion-item--${issue.cat}`}>
+                    <div className="suggestion-meta">{issue.cat}</div>
+                    <div className="suggestion-copy">
+                      <strong>{issue.orig}</strong>
+                      <span>{issue.msg} Try: {issue.fix}</span>
+                    </div>
+                  </div>
+                ))}
+                {analysis.insights.slice(0, 4).map((insight, index) => (
+                  <div key={`${insight.type}-${index}`} className={`suggestion-item suggestion-item--${insight.type}`}>
+                    <div className="suggestion-meta">{insight.type}</div>
+                    <div className="suggestion-copy">
+                      <strong>{insight.message}</strong>
+                      <span>{insight.suggestion}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {/* Format bar */}
           <div className="format-bar">
             <button className="fmt-btn" onClick={()=>{
@@ -1096,33 +1314,48 @@ export default function App() {
               <Download size={13} style={{ display: 'inline-block', verticalAlign: 'text-bottom', marginRight: '4px' }} /> Download
             </button>
             <button className={`fmt-btn fmt-btn--fix${hasFixed?' fmt-btn--fixed':''}`} onClick={fixAll}
-              disabled={hasFixed||isFixing||plainText.length<5}>
-              {hasFixed?'✅ Fixed':isFixing?'…':'FIX ALL'}
+              disabled={isFixing||plainText.length<5}>
+              {isFixing?'…':hasFixed?'CHECK AGAIN':'FIX ALL'}
             </button>
           </div>
         </motion.div>
 
         {/* RIGHT — Paraphrase */}
         <motion.div initial={{opacity:0,x:24}} animate={{opacity:1,x:0}} transition={{duration:0.3}} className="paraphrase-panel">
-          <div className="paraphrase-title"><span className="paraphrase-title-text">PARAPHRASE</span></div>
+          <div className="paraphrase-title">
+            <span className="paraphrase-title-text">PARAPHRASE</span>
+            <button className="paraphrase-main-btn" disabled={isParaphrasing || plainText.length < 5} onClick={() => generateParaphrase(plainText, 'standard')}>
+              {isParaphrasing ? <RefreshCw size={14} className="spin"/> : <Sparkles size={14}/>}
+              Paraphrase Text
+            </button>
+          </div>
           <div className="paraphrase-grid">
-            {PARAPHRASE_MODES.map(({key, label, emoji}) => {
-              const val = paraphraseSets?.[key as keyof ParaphraseSets] ?? '';
+            {PARAPHRASE_MODES.map(({key, label, emoji, desc}) => {
+              const val = paraphraseSets?.[key] ?? '';
+              const isLoadingStyle = isParaphrasing && activeParaphraseStyle === key;
               return (
                 <motion.div key={key} whileHover={{y:-2}} transition={{duration:0.12}}
                   className={`para-card${key==='professional'?' para-card--highlighted':''}`}>
                   <div className="para-card-header">
-                    <div className="para-card-title"><span className="para-emoji">{emoji}</span><span>{label}</span></div>
+                    <button
+                      className="para-style-btn"
+                      onClick={() => generateParaphrase(plainText, key)}
+                      disabled={isParaphrasing || plainText.length < 5}
+                      title={desc}
+                    >
+                      <span className="para-emoji">{emoji}</span><span>{label}</span>
+                    </button>
                     {val && <button className="para-copy-btn" onClick={()=>copyToClipboard(val,key)} title="Copy">
                       {copiedKey===key?<Check size={12}/>:<Copy size={12}/>}
                     </button>}
                   </div>
+                  <p className="para-style-desc">{desc}</p>
                   <div className="para-card-body">
-                    {isParaphrasing
+                    {isLoadingStyle
                       ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Generating…</div>
                       : val
                         ? <p className="para-text">{val}</p>
-                        : <p className="para-placeholder">Variation will appear here…</p>}
+                        : <p className="para-placeholder">Click this style to generate a paraphrase.</p>}
                   </div>
                   {val && <button className="para-use-btn" onClick={()=>{
                     pushUndo(segments);
@@ -1135,10 +1368,6 @@ export default function App() {
           <div className="paraphrase-footer">
             <div className={`para-tone-chip ${toneStyleClass}`}><span>{toneEmoji}</span><span className="para-tone-name">{toneLabel||'Neutral'}</span></div>
             <div className="para-word-count">{wordCount} WORDS · {charCount} CHARS</div>
-            <button className="refresh-btn" onClick={()=>plainText.length>=5&&generateParaphraseSets(plainText)}
-              disabled={isParaphrasing||plainText.length<5} title="Regenerate">
-              <RefreshCw size={12} className={isParaphrasing?'spin':''}/> Refresh
-            </button>
           </div>
         </motion.div>
       </main>
@@ -1181,7 +1410,7 @@ export default function App() {
           {showPlagiarism && (
             <motion.div key="plagiarism" initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0,y:20}} className="plagiarism-panel">
               <div className="feature-panel-header">
-                <span>🛡 Originality Check (AI-powered) <span className="plag-disclaimer">This uses AI analysis, not a database scan. For academic submission, use a dedicated service.</span></span>
+                <span>🛡 Originality Check <span className="plag-disclaimer">{HAS_API_KEY ? 'Hybrid AI analysis, not a database scan.' : 'Offline phrase check, not a database scan.'} For academic submission, use a dedicated service.</span></span>
                 <button className="icon-btn-ghost" onClick={() => setShowPlagiarism(false)}>✕</button>
               </div>
               {isCheckingPlag ? <div className="para-loading"><RefreshCw size={13} className="spin"/> Analyzing…</div> : plagiarismResult && (
