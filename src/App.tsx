@@ -147,6 +147,17 @@ function getRuleReplacement(
   return rule.fix.includes('$') ? replaced : preserveCase(original, replaced);
 }
 
+function normalizePastedPlainText(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .split(/\n{2,}/)
+    .map(paragraph => paragraph.replace(/\n+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function getLocalIssues(content: string): Array<Issue & { offset: number }> {
   const issues: Array<Issue & { offset: number }> = [];
   const seen = new Set<string>();
@@ -460,18 +471,15 @@ export default function App() {
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const html  = e.clipboardData.getData('text/html');
-    const plain = e.clipboardData.getData('text/plain');
-    if (!html && !plain) return;
-    let pastedSegs: StyledSegment[] = [];
-    if (html) {
-      const tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      tmp.querySelectorAll('script,style').forEach(el => el.remove());
-      pastedSegs = domToSegments(tmp);
-    } else {
-      pastedSegs = [{ text: plain, bold: false, italic: false, underline: false, highlight: null }];
-    }
+    const pastedText = normalizePastedPlainText(e.clipboardData.getData('text/plain'));
+    if (!pastedText) return;
+    const pastedSegs: StyledSegment[] = [{
+      text: pastedText,
+      bold: false,
+      italic: false,
+      underline: false,
+      highlight: null,
+    }];
     if (!editorRef.current) return;
     const offsets = getSelectionOffsets(editorRef.current);
     const insertAt  = offsets ? offsets[0] : charCount;

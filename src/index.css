@@ -205,9 +205,9 @@ body {
 }
 .editor-contenteditable {
   position: absolute; inset: 0; padding: 1.1rem 1.25rem;
-  font-family: var(--font-body); font-size: 1rem; font-weight: 500; line-height: 1.8;
+  font-family: var(--font-body); font-size: 1rem; font-weight: 400; line-height: 1.8;
   color: var(--editor-text); background: transparent; border: none; outline: none;
-  white-space: pre-wrap; word-break: break-word; overflow-y: auto;
+  white-space: pre-wrap; word-break: normal; overflow-wrap: break-word; overflow-y: auto;
   z-index: 2; caret-color: #2A5C3A;
 }
 .editor-contenteditable:empty::before {
@@ -220,7 +220,7 @@ body {
 .editor-contenteditable::-webkit-scrollbar-thumb:hover { background: rgba(42,58,46,0.32); }
 
 /* ── Rich text segment styles (from richText engine) ── */
-.rt-seg { display: inline; white-space: inherit; }
+.rt-seg { display: inline; font-weight: 400; white-space: inherit; word-break: inherit; overflow-wrap: inherit; }
 .rt-bold      { font-weight: 800 !important; }
 .rt-italic    { font-style: italic !important; }
 .rt-underline { text-decoration: underline !important; text-underline-offset: 2px; }
